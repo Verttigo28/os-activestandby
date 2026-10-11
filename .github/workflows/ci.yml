@@ -31,7 +31,7 @@ jobs:
         run: |
           V=dev; case "$GITHUB_REF" in refs/tags/v*) V="${GITHUB_REF_NAME#v}";; esac
           go build -trimpath -ldflags "-s -w -X main.version=$V" -o ../src/sbin/hasyncd .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: src-with-daemon
           path: |
