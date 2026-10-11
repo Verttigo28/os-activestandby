@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.3.0-phaseD"
+const version = "0.4.0"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`
@@ -24,6 +24,15 @@ type Config struct {
 	AutoFailover *bool  `json:"auto_failover"`
 	AllowHAOnly  bool   `json:"allow_ha_only_promote"`
 	ForcePromisc bool   `json:"force_promisc"`
+
+	NotifyLevel    string `json:"notify_level"`
+	NotifyWebhook  string `json:"notify_webhook"`
+	FenceCommand   string `json:"fence_command"`
+	Preempt        bool   `json:"preempt"`
+	PreemptDelay   int    `json:"preempt_delay"`
+	MonitorIfaces  string `json:"monitor_interfaces"`
+	HealthServices bool   `json:"health_services"`
+	HealthHold     int    `json:"health_hold"`
 }
 
 func (c Config) autoOn() bool { return c.AutoFailover == nil || *c.AutoFailover }
@@ -47,6 +56,11 @@ type Daemon struct {
 	auto          *autoState
 	mgmtIP        atomic.Value
 	hb            *Heartbeat
+	hist          *History
+	health        *healthState
+	drift         *driftState
+	leases        *leaseState
+	upd           *updateRun
 }
 
 func loadConfig() Config {
@@ -90,8 +104,16 @@ func runDaemon() error {
 		return err
 	}
 	d := &Daemon{cfg: loadConfig(), store: st, cert: cert, fp: fingerprint(cert.Certificate[0]), pairing: &Pairing{}, ops: &Ops{}, hb: newHeartbeat(), auto: &autoState{}, sync: &syncCtl{wake: make(chan struct{}, 1)}}
+	d.health, d.drift, d.leases, d.upd = newHealthState(), &driftState{}, &leaseState{}, &updateRun{}
 	d.ev = openEvents(st.dir)
+	d.ev.sink = d.notify
+	d.hist = openHistory(st.dir)
 	d.localVer = run("opnsense-version")
+	if err := validateFenceCommand(d.cfg.FenceCommand); err != nil {
+		// fail safe: the operator asked for fencing, so an unusable command must BLOCK automatic promotion (runFence
+		// re-validates and refuses), never silently turn fencing off
+		d.event("error", "the configured fencing command is not usable: automatic promotion is blocked until it is fixed: %v", err)
+	}
 	d.event("info", "hasyncd %s started (role %s, state %s%s)", version, st.Get().Role, st.Get().State, map[bool]string{true: ", STATE FILES WERE UNREADABLE", false: ""}[st.Get().Corrupt])
 
 	listen := os.Getenv("HASYNC_LISTEN") // dev/test override, e.g. 127.0.0.1:7690
@@ -127,7 +149,14 @@ func runDaemon() error {
 	go d.syncLoop()
 	go d.pfsyncSetup()
 	go d.autoLoop()
+	go d.healthLoop()
+	go d.driftLoop()
+	go d.leaseLoop()
+	go d.jobLoop()
 	go d.mgmtListener()
+	if s := d.store.Get(); s.State == StateStandby && s.ActiveSHA == "" && s.PeerFP != "" && activeValid(st.dir) {
+		d.recordIntegrity()
+	}
 	log.Printf("hasyncd %s listening on %s (fp %s, role %s)", version, listen, d.fp[:16], st.Get().Role)
 	return srv.ListenAndServeTLS("", "")
 }
@@ -142,6 +171,14 @@ func (d *Daemon) peerMux() *http.ServeMux {
 	mux.HandleFunc("/v1/promote", d.post(d.paired(d.handlePromote)))
 	mux.HandleFunc("/v1/handover", d.post(d.paired(d.handleHandover)))
 	mux.HandleFunc("/v1/break", d.post(d.paired(d.handlePeerBreak)))
+	mux.HandleFunc("/v1/maintenance", d.post(d.paired(d.handleMaintenance)))
+	mux.HandleFunc("/v1/preflight", d.post(d.paired(d.handlePreflight)))
+	mux.HandleFunc("/v1/dryrun", d.post(d.paired(d.handleDryRun)))
+	mux.HandleFunc("/v1/file", d.post(d.paired(d.handleFile)))
+	mux.HandleFunc("/v1/update/start", d.post(d.paired(d.handleUpdateStart)))
+	mux.HandleFunc("/v1/update/status", d.post(d.paired(d.handleUpdateStatus)))
+	mux.HandleFunc("/v1/reboot", d.post(d.paired(d.handleReboot)))
+	mux.HandleFunc("/v1/job", d.post(d.paired(d.handleJobAdopt)))
 	return mux
 }
 

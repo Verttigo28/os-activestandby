@@ -1,6 +1,6 @@
 <model>
     <mount>//OPNsense/ActiveStandby</mount>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <description>Active/standby HA settings (node-local; excluded from config sync)</description>
     <items>
         <general>
@@ -30,6 +30,50 @@
                 <Default>0</Default>
                 <Required>Y</Required>
             </force_promisc>
+            <preempt type="BooleanField">
+                <Default>0</Default>
+                <Required>Y</Required>
+            </preempt>
+            <preempt_delay type="IntegerField">
+                <Default>300</Default>
+                <MinimumValue>30</MinimumValue>
+                <MaximumValue>86400</MaximumValue>
+                <Required>Y</Required>
+            </preempt_delay>
+            <monitor_interfaces type="TextField">
+                <Required>N</Required>
+                <Mask>/^([a-zA-Z0-9_]+(,[a-zA-Z0-9_]+)*)?$/</Mask>
+                <ValidationMessage>Comma separated interface keys, e.g. wan,opt3.</ValidationMessage>
+            </monitor_interfaces>
+            <health_services type="BooleanField">
+                <Default>0</Default>
+                <Required>Y</Required>
+            </health_services>
+            <health_hold type="IntegerField">
+                <Default>6</Default>
+                <MinimumValue>3</MinimumValue>
+                <MaximumValue>120</MaximumValue>
+                <Required>Y</Required>
+            </health_hold>
+            <fence_command type="TextField">
+                <Required>N</Required>
+                <Mask>/^(\/[A-Za-z0-9_.\/-]{1,200})?$/</Mask>
+                <ValidationMessage>Enter an absolute path without spaces.</ValidationMessage>
+            </fence_command>
+            <notify_level type="OptionField">
+                <Default>warning</Default>
+                <Required>Y</Required>
+                <OptionValues>
+                    <info>Everything</info>
+                    <warning>Warnings and errors</warning>
+                    <error>Errors only</error>
+                </OptionValues>
+            </notify_level>
+            <notify_webhook type="TextField">
+                <Required>N</Required>
+                <Mask>/^(https?:\/\/[^\s"'&lt;&gt;]{3,500})?$/</Mask>
+                <ValidationMessage>Enter an http(s) URL.</ValidationMessage>
+            </notify_webhook>
             <listen_port type="IntegerField">
                 <Default>7690</Default>
                 <MinimumValue>1024</MinimumValue>

@@ -29,16 +29,35 @@ function skipKeys(SimpleXMLElement $cfg): array
     return $g === null ? [] : array_values(array_filter([(string)$g->ha_interface, (string)$g->mgmt_interface]));
 }
 
+function virtualDevices(SimpleXMLElement $cfg): array
+{
+    $v = [];
+    foreach (['vlans' => ['vlan', 'vlanif'], 'laggs' => ['lagg', 'laggif'], 'bridges' => ['bridge', 'bridgeif'],
+        'gres' => ['gre', 'greif'], 'gifs' => ['gif', 'gifif']] as $sec => [$item, $field]) {
+        foreach ($cfg->$sec->$item ?? [] as $n) {
+            $v[] = (string)$n->$field;
+        }
+    }
+    return $v;
+}
+
 function dataInterfaces(SimpleXMLElement $cfg): array
 {
     $skip = skipKeys($cfg);
+    $virtual = virtualDevices($cfg);
     $out = [];
     foreach ($cfg->interfaces->children() as $key => $node) {
         $dev = (string)$node->if;
         if ($dev === '' || in_array((string)$key, $skip, true) || preg_match(NOT_DATA, $dev)) {
             continue;
         }
-        $out[] = ['key' => (string)$key, 'dev' => $dev];
+        $out[] = [
+            'key' => (string)$key,
+            'dev' => $dev,
+            'enabled' => (string)$node->enable !== '',
+            'spoofmac' => (string)$node->spoofmac,
+            'virtual' => in_array($dev, $virtual, true),
+        ];
     }
     return $out;
 }

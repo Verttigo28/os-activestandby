@@ -17,6 +17,8 @@ const biocsetif = 0x8020426c // _IOW('B', 108, struct ifreq)
 // announce sends gratuitous ARPs (RFC 5227 announcement form) for every IPv4 address of dev
 // through a raw bpf write, three times 100 ms apart.
 func announce(dev string) {
+	t0 := time.Now()
+	defer func() { log.Printf("  garp %s took %dms", dev, time.Since(t0).Milliseconds()) }()
 	ifc, err := net.InterfaceByName(dev)
 	if err != nil || len(ifc.HardwareAddr) != 6 {
 		return
@@ -36,19 +38,26 @@ func announce(dev string) {
 		log.Printf("garp: open bpf: %v", err)
 		return
 	}
-	defer f.Close()
 	var ifr [32]byte
 	copy(ifr[:], dev)
 	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), biocsetif, uintptr(unsafe.Pointer(&ifr[0]))); e != 0 {
 		log.Printf("garp: BIOCSETIF %s: %v", dev, e)
+		f.Close()
 		return
 	}
-	for i := 0; i < 3; i++ {
-		for _, fr := range frames {
-			f.Write(fr)
-		}
-		time.Sleep(100 * time.Millisecond)
+	for _, fr := range frames {
+		f.Write(fr)
 	}
+	// the first announcement goes out at once; the repeats run in the background so promote does not wait for them
+	go func() {
+		defer f.Close()
+		for i := 0; i < 2; i++ {
+			time.Sleep(100 * time.Millisecond)
+			for _, fr := range frames {
+				f.Write(fr)
+			}
+		}
+	}()
 }
 
 func garpFrame(mac net.HardwareAddr, ip net.IP) []byte {

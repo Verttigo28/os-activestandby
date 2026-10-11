@@ -24,11 +24,54 @@
         <help>The standby promotes itself when the active node is lost on all heartbeat paths, and a rebooted node waits in standby. Disable to fail over manually only.</help>
     </field>
     <field>
-        <id>activestandby.general.allow_ha_only_promote</id>
-        <label>Promote on HA-link-only silence</label>
+        <id>activestandby.general.preempt</id>
+        <label>Primary takes over again (preemption)</label>
         <type>checkbox</type>
+        <help>When the primary node is back as standby and the peer has been active and healthy for the delay below, hand the active role back to the primary.</help>
+    </field>
+    <field>
+        <id>activestandby.general.preempt_delay</id>
+        <label>Preemption delay (seconds)</label>
+        <type>text</type>
         <advanced>true</advanced>
-        <help>Without a management heartbeat path, promote even if this node cannot prove its own HA link is healthy. Risk: both nodes active if only the cable is cut.</help>
+    </field>
+    <field>
+        <id>activestandby.general.monitor_interfaces</id>
+        <label>Monitored interfaces</label>
+        <type>text</type>
+        <help>Comma separated interface keys (e.g. wan). If one loses carrier on the active node while the standby still sees link on the same port, the roles are switched.</help>
+    </field>
+    <field>
+        <id>activestandby.general.health_services</id>
+        <label>Monitor critical services</label>
+        <type>checkbox</type>
+        <help>Restart the packet filter and IPsec if they die on the active node; switch roles if that does not help.</help>
+    </field>
+    <field>
+        <id>activestandby.general.health_hold</id>
+        <label>Failure hold time (seconds)</label>
+        <type>text</type>
+        <advanced>true</advanced>
+        <help>How long a health problem must persist on the active node before roles are switched.</help>
+    </field>
+    <field>
+        <id>activestandby.general.fence_command</id>
+        <label>Fencing command</label>
+        <type>text</type>
+        <advanced>true</advanced>
+        <help>Absolute path of an executable (owned by root, not writable by others) that is run before an automatic promotion, for example to power off the peer through IPMI or a smart PDU. A non-zero exit status or a timeout (30 s) cancels the promotion. Arguments: promote, peer address.</help>
+    </field>
+    <field>
+        <id>activestandby.general.notify_level</id>
+        <label>Notification level</label>
+        <type>dropdown</type>
+        <help>Which events are sent to the webhook. Every event is written to syslog (tag hasyncd). For e-mail, add the "ha_status" check from the documentation to Monit.</help>
+    </field>
+    <field>
+        <id>activestandby.general.notify_webhook</id>
+        <label>Webhook URL</label>
+        <type>text</type>
+        <help>Receives a JSON POST ({time, kind, node, message}) for every event at or above the level.</help>
     </field>
     <field>
         <id>activestandby.general.force_promisc</id>
@@ -36,6 +79,13 @@
         <type>checkbox</type>
         <advanced>true</advanced>
         <help>Needed on virtual NICs (Hyper-V, some virtio setups) whose driver does not reprogram its receive filter when the shared MAC is applied. Real NICs (Intel ixl, igb, ...) do not need it.</help>
+    </field>
+    <field>
+        <id>activestandby.general.allow_ha_only_promote</id>
+        <label>Promote on HA-link-only silence</label>
+        <type>checkbox</type>
+        <advanced>true</advanced>
+        <help>Without a management heartbeat path, promote even if this node cannot prove its own HA link is healthy. Risk: both nodes active if only the cable is cut.</help>
     </field>
     <field>
         <id>activestandby.general.listen_port</id>

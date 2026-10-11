@@ -67,6 +67,12 @@ export default class ActiveStandby extends BaseTableWidget {
             [t.links, links],
             [t.sync, sync],
         ];
+        if (s.maintenance) {
+            rows.push([t.maintenance, `<span class="badge badge-pill" style="background-color:#31708f">${t.maintenanceon}</span>`]);
+        }
+        if (s.health || s.drift) {
+            rows.push([t.problems, `<span style="color:#c00">${this.esc(s.health || s.drift)}</span>`]);
+        }
         if (s.version_mismatch) {
             rows.push([t.versions, `<span style="color:#e68a00">${this.esc(s.os_version)} / ${this.esc(s.peer_os_version)}</span>`]);
         }

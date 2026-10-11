@@ -28,10 +28,12 @@ const (
 )
 
 type autoState struct {
-	noActiveSince time.Time
-	dualSince     time.Time
-	lastChange    time.Time
-	blocked       atomic.Value // string: why automatic promotion is currently held back
+	noActiveSince   time.Time
+	dualSince       time.Time
+	lastChange      time.Time
+	peerActiveSince time.Time    // preemption: how long the peer has been active, alive and healthy
+	peerBusySince   time.Time    // the peer has been promoting/demoting since
+	blocked         atomic.Value // string: why automatic promotion is currently held back
 }
 
 func (a *autoState) setBlocked(s string) { a.blocked.Store(s) }
@@ -74,6 +76,7 @@ func (d *Daemon) autoStep() {
 		return
 	}
 	alive, _, peer := d.hb.Snapshot()
+	maint := d.maintenanceOn() // pauses everything below except split-brain resolution
 
 	switch st.State {
 	case StateActive:
@@ -100,11 +103,30 @@ func (d *Daemon) autoStep() {
 
 	case StateStandby:
 		d.auto.dualSince = time.Time{}
+		if maint {
+			d.auto.noActiveSince, d.auto.peerActiveSince = time.Time{}, time.Time{}
+			d.auto.setBlocked("")
+			return
+		}
 		if alive {
 			if peer.State == StateActive {
 				d.auto.noActiveSince = time.Time{}
 				d.auto.setBlocked("")
+				d.preemptStep(st, peer)
 				return
+			}
+			d.auto.peerActiveSince = time.Time{}
+			if peer.Busy {
+				if d.auto.peerBusySince.IsZero() {
+					d.auto.peerBusySince = time.Now()
+				}
+				if time.Since(d.auto.peerBusySince) < time.Minute {
+					// the peer is taking over right now (a manual failover takes a few seconds): wait for it
+					d.auto.noActiveSince = time.Time{}
+					return
+				}
+			} else {
+				d.auto.peerBusySince = time.Time{}
 			}
 			// peer is alive but nobody is active (typically both just booted)
 			if d.auto.noActiveSince.IsZero() {
@@ -115,11 +137,11 @@ func (d *Daemon) autoStep() {
 				wait = electionMaster
 			}
 			if time.Since(d.auto.noActiveSince) >= wait {
-				d.autoPromote("election: no active node, " + st.Role + " role")
+				d.autoPromote("election: no active node, "+st.Role+" role", false)
 			}
 			return
 		}
-		d.auto.noActiveSince = time.Time{}
+		d.auto.noActiveSince, d.auto.peerActiveSince = time.Time{}, time.Time{}
 
 		// peer silent on every path
 		need := hbDead
@@ -149,14 +171,24 @@ func (d *Daemon) autoStep() {
 				"(HA/management carrier down). Promote manually if the peer is really down.")
 			return
 		}
-		d.autoPromote("peer lost on all heartbeat paths")
+		d.autoPromote("peer lost on all heartbeat paths", true)
 	}
 }
 
-func (d *Daemon) autoPromote(reason string) {
+// autoPromote promotes this node. With fence set (the peer went silent) the configured fencing command must
+// succeed first, otherwise the promotion is cancelled: a silent peer may still be alive.
+func (d *Daemon) autoPromote(reason string, fence bool) {
 	d.auto.lastChange = time.Now()
 	d.auto.noActiveSince = time.Time{}
 	d.auto.setBlocked("")
+	if fence && d.cfg.FenceCommand != "" {
+		d.event("warning", "fencing the peer before promoting (%s)", d.cfg.FenceCommand)
+		if err := d.runFence(); err != nil {
+			d.event("error", "promotion cancelled: %v", err)
+			d.auto.setBlocked("promotion cancelled, fencing failed: " + err.Error())
+			return
+		}
+	}
 	if err := d.promote("AUTO: " + reason); err != nil {
 		log.Printf("automatic promote failed: %v", err)
 		d.auto.setBlocked("automatic promote failed: " + err.Error())

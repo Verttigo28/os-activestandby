@@ -26,6 +26,7 @@ type Events struct {
 	mu   sync.Mutex
 	list []Event
 	path string
+	sink func(Event) // notification dispatcher (syslog, webhook), called asynchronously
 }
 
 func openEvents(dir string) *Events {
@@ -58,6 +59,9 @@ func (e *Events) add(kind, msg string) {
 		b, _ := json.Marshal(ev)
 		f.Write(append(b, '\n'))
 		f.Close()
+	}
+	if e.sink != nil {
+		go e.sink(ev)
 	}
 }
 

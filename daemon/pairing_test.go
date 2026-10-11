@@ -28,7 +28,8 @@ func newNode(t *testing.T) *testNode {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &Daemon{store: st, cert: cert, fp: fingerprint(cert.Certificate[0]), pairing: &Pairing{}, ops: &Ops{}, hb: newHeartbeat(), auto: &autoState{}, sync: &syncCtl{wake: make(chan struct{}, 1)}}
+	d := &Daemon{store: st, cert: cert, fp: fingerprint(cert.Certificate[0]), pairing: &Pairing{}, ops: &Ops{}, hb: newHeartbeat(), auto: &autoState{}, sync: &syncCtl{wake: make(chan struct{}, 1)},
+		health: newHealthState(), drift: &driftState{}, leases: &leaseState{}, upd: &updateRun{}}
 	srv := httptest.NewUnstartedServer(d.peerMux())
 	srv.TLS = d.peerTLS()
 	srv.StartTLS()

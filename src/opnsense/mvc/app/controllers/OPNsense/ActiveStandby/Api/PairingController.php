@@ -23,6 +23,51 @@ class PairingController extends ApiControllerBase
         return $this->ctl('ctl_status');
     }
 
+    /** Maintenance mode on/off for both nodes (automatic failover paused). */
+    public function maintenanceAction()
+    {
+        if (!$this->request->isPost()) {
+            return ['error' => 'POST required'];
+        }
+        $on = $this->request->getPost('on') === '1' ? 'on' : 'off';
+        $hours = (int)$this->request->getPost('hours');
+        return $this->ctl('ctl_maintenance', [$on, (string)max(1, min(72, $hours ?: 4))]);
+    }
+
+    /** Health of both nodes plus a dry run of the standby taking over (changes nothing). */
+    public function preflightAction()
+    {
+        return $this->ctl('ctl_preflight');
+    }
+
+    public function historyAction()
+    {
+        return $this->ctl('ctl_history');
+    }
+
+    public function healthAction()
+    {
+        return $this->ctl('ctl_health');
+    }
+
+    public function upgradestartAction()
+    {
+        if (!$this->request->isPost()) {
+            return ['error' => 'POST required'];
+        }
+        return $this->ctl($this->request->getPost('failback') === '1' ? 'ctl_upgrade_start_failback' : 'ctl_upgrade_start');
+    }
+
+    public function upgradecancelAction()
+    {
+        return $this->request->isPost() ? $this->ctl('ctl_upgrade_cancel') : ['error' => 'POST required'];
+    }
+
+    public function upgradestatusAction()
+    {
+        return $this->ctl('ctl_upgrade_status');
+    }
+
     public function infoAction()
     {
         return $this->ctl('ctl_info');

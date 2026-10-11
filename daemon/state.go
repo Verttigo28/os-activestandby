@@ -35,6 +35,16 @@ type State struct {
 	// Corrupt: the state files were unreadable but this node shows signs of having been paired. It then
 	// runs as a silent standby with no peer pinned until it is re-paired. Never active.
 	Corrupt bool `json:"corrupt,omitempty"`
+
+	// Maintenance pauses automatic failover, preemption and health-driven switching (split-brain protection stays on).
+	Maintenance      bool   `json:"maintenance,omitempty"`
+	MaintenanceUntil string `json:"maintenance_until,omitempty"` // safety: switches itself off
+	MaintAt          string `json:"maint_at,omitempty"`          // time of the last change; the newest change wins between the nodes
+	// Integrity hashes of the files this daemon wrote on a standby; a mismatch means someone changed them (drift).
+	ActiveSHA string `json:"active_sha,omitempty"`
+	ViewSHA   string `json:"view_sha,omitempty"`
+	// Job is the guided upgrade in progress, if any (see upgrade.go). Persisted so it survives reboots and failovers.
+	Job *Job `json:"job,omitempty"`
 }
 
 type Store struct {

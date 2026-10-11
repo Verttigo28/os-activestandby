@@ -23,7 +23,7 @@ foreach ($n in $Nodes) {
     Opn-Sh $n @'
 set -e
 tar -xf /tmp/activestandby.tar -C /usr/local --no-same-owner
-chmod 0755 /usr/local/etc/rc.syshook.d/early/05-activestandby /usr/local/etc/rc.syshook.d/config/50-activestandby /usr/local/sbin/hasyncd /usr/local/etc/rc.d/hasyncd /usr/local/opnsense/scripts/OPNsense/ActiveStandby/*.php
+chmod 0755 /usr/local/etc/rc.syshook.d/early/05-activestandby /usr/local/etc/rc.syshook.d/config/50-activestandby /usr/local/sbin/hasyncd /usr/local/etc/rc.d/hasyncd /usr/local/opnsense/scripts/OPNsense/ActiveStandby/*.php /usr/local/opnsense/scripts/OPNsense/ActiveStandby/*.sh
 chmod 0644 /usr/local/opnsense/service/conf/actions.d/actions_activestandby.conf
 /usr/local/etc/rc.configure_plugins >/dev/null 2>&1 || true
 service configd restart >/dev/null 2>&1

@@ -25,6 +25,7 @@ const (
 
 	ifacesScript  = "/usr/local/opnsense/scripts/OPNsense/ActiveStandby/ifaces.php"
 	configXML     = "/conf/config.xml"
+	reconfScript  = "/usr/local/opnsense/scripts/OPNsense/ActiveStandby/reconfigure_ifaces.php"
 	devicesScript = "/usr/local/opnsense/scripts/OPNsense/ActiveStandby/create_devices.php"
 )
 
@@ -47,8 +48,11 @@ var (
 )
 
 type Iface struct {
-	Key string `json:"key"`
-	Dev string `json:"dev"`
+	Key      string `json:"key"`
+	Dev      string `json:"dev"`
+	Enabled  bool   `json:"enabled"`
+	Spoofmac string `json:"spoofmac"`
+	Virtual  bool   `json:"virtual"` // a VLAN/LAGG/bridge/... device defined in the config (created on promote)
 }
 
 type IfaceSet struct {
@@ -129,6 +133,7 @@ func (d *Daemon) writeStandbyView(full string) error {
 // flushDev removes every address from the device and sets it down.
 func flushDev(dev string) {
 	out, _ := sh("ifconfig", dev)
+	sh("ifconfig", dev, "down") // traffic stops here; the rest is cleanup
 	for _, l := range strings.Split(out, "\n") {
 		f := strings.Fields(l)
 		if len(f) >= 2 && f[0] == "inet" {
@@ -174,16 +179,22 @@ func (d *Daemon) demote(reason string) error {
 		return err
 	}
 	// interfaces first (traffic stops immediately), then rewrite the config so nothing re-enables them
+	var fw sync.WaitGroup
 	for _, dev := range set.ForceDown {
-		flushDev(dev)
+		fw.Add(1)
+		go func(dev string) { defer fw.Done(); flushDev(dev) }(dev)
 	}
+	fw.Wait()
 	step(t0, fmt.Sprintf("%d devices down", len(set.ForceDown)))
 	if err := d.writeStandbyView(activeXML(d.store.dir)); err != nil {
 		return err
 	}
 	step(t0, "standby view written")
 	d.event("change", "demoted to STANDBY (%s)", reason)
-	return d.store.Update(func(s *State) { s.State = StateStandby })
+	err = d.store.Update(func(s *State) { s.State = StateStandby })
+	d.hist.add(HistoryEntry{Type: "demote", Reason: reason, DurationMs: time.Since(t0).Milliseconds(), Epoch: d.store.Get().Epoch})
+	d.recordIntegrity()
+	return err
 }
 
 // promote: standby -> active.
@@ -220,14 +231,23 @@ func (d *Daemon) promote(reason string) error {
 	if len(set.DeviceTypes) > 0 {
 		if out, err := sh(devicesScript); err != nil {
 			log.Printf("promote: creating virtual devices: %v: %s", err, out)
+			d.event("error", "creating the virtual devices (VLAN/LAGG/...) failed: %s", strings.TrimSpace(out))
 		}
 	}
 	step(t0, "virtual devices created")
 	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 	var firstErr error
+	// one php process for all interfaces (the stock action starts one per interface); the stock action is the fallback
+	keys := []string{}
 	for _, i := range set.Data {
-		if out, err := sh("configctl", "interface", "reconfigure", i.Key); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("reconfigure %s: %v: %s", i.Key, err, out)
+		keys = append(keys, i.Key)
+	}
+	if out, err := sh(reconfScript, keys...); err != nil {
+		log.Printf("promote: fast interface reconfigure failed (%v: %s), using the stock action", err, out)
+		for _, k := range keys {
+			if out, err := sh("configctl", "interface", "reconfigure", k); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("reconfigure %s: %v: %s", k, err, out)
+			}
 		}
 	}
 	step(t0, "interfaces reconfigured")
@@ -259,9 +279,24 @@ func (d *Daemon) promote(reason string) error {
 	}
 	step(t0, "gratuitous ARP sent")
 	var wg sync.WaitGroup
-	for _, c := range haStart {
+	cmds := append([][]string{}, haStart...)
+	// DHCP servers must re-read the lease files replicated from the old active node (only when they are enabled)
+	if svc, _ := sh("pluginctl", "-S"); svc != "" {
+		if strings.Contains(svc, `"name": "dnsmasq"`) {
+			cmds = append(cmds, []string{"configctl", "dnsmasq", "restart"})
+		}
+		if strings.Contains(svc, `"name": "kea`) {
+			cmds = append(cmds, []string{"configctl", "kea", "restart"})
+		}
+	}
+	for _, c := range cmds {
 		wg.Add(1)
-		go func(c []string) { defer wg.Done(); sh(c[0], c[1:]...) }(c)
+		go func(c []string) {
+			defer wg.Done()
+			t1 := time.Now()
+			out, err := sh(c[0], c[1:]...)
+			log.Printf("  start %v: %dms err=%v out=%q", c, time.Since(t1).Milliseconds(), err, out)
+		}(c)
 	}
 	wg.Wait()
 	step(t0, "services started")
@@ -275,6 +310,9 @@ func (d *Daemon) promote(reason string) error {
 		s.Epoch++
 		s.AckedSHA = "" // the new active node pushes its full config to the new standby, so both sides converge
 	})
+	d.hist.add(HistoryEntry{Type: "promote", Reason: reason, DurationMs: time.Since(t0).Milliseconds(), Epoch: d.store.Get().Epoch})
+	d.leases.reset()
+	d.drift.reason.Store("")
 	step(t0, "ACTIVE")
 	return err
 }
@@ -399,7 +437,12 @@ func (d *Daemon) ensureConfigLock() {
 	locked := isImmutable(configPath())
 	switch {
 	case st.State == StateStandby && !locked && time.Now().After(d.unlockedUntil):
+		wasWindow := !d.unlockedUntil.IsZero()
 		lockConfig()
+		if wasWindow { // the operator's unlock window ended: whatever was changed in it is accepted as the new baseline
+			d.unlockedUntil = time.Time{}
+			d.recordIntegrity()
+		}
 	case st.State != StateStandby && locked:
 		unlockConfig()
 	}

@@ -30,6 +30,15 @@ type hbMsg struct {
 	TimeMs int64  `json:"time_ms,omitempty"` // sender clock; the standby follows the active node
 	Ver    string `json:"ver,omitempty"`     // OPNsense version of the sender
 	Plug   string `json:"plug,omitempty"`    // hasyncd (plugin) version of the sender
+
+	Links   map[string]bool `json:"links,omitempty"`   // carrier of the sender's data devices
+	Health  string          `json:"health,omitempty"`  // non-empty: the sender (active) currently fails a health check
+	Applied string          `json:"applied,omitempty"` // hash of the last config revision the sender (standby) applied
+
+	Busy       bool   `json:"busy,omitempty"`        // sender is in the middle of a promote/demote: the peer must not elect itself meanwhile
+	Maint      bool   `json:"maint,omitempty"`       // maintenance mode as the sender knows it ...
+	MaintUntil string `json:"maint_until,omitempty"` // ... its deadline ...
+	MaintAt    string `json:"maint_at,omitempty"`    // ... and when it last changed (the newest change wins on both nodes)
 }
 
 // Heartbeat tracks the peer over up to two independent paths: the dedicated HA link ("ha") and the
@@ -41,10 +50,24 @@ type Heartbeat struct {
 	peer     hbMsg
 	seq      uint64
 	started  time.Time
+	rtt      map[string]time.Duration
 }
 
 func newHeartbeat() *Heartbeat {
-	return &Heartbeat{pathLast: map[string]time.Time{}, started: time.Now()}
+	return &Heartbeat{pathLast: map[string]time.Time{}, started: time.Now(), rtt: map[string]time.Duration{}}
+}
+
+func (h *Heartbeat) setRTT(path string, d time.Duration) {
+	h.mu.Lock()
+	h.rtt[path] = d
+	h.mu.Unlock()
+}
+
+// RTT is the last heartbeat round-trip time measured on the path.
+func (h *Heartbeat) RTT(path string) time.Duration {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.rtt[path]
 }
 
 func (h *Heartbeat) seen(path string, m hbMsg) {
@@ -94,7 +117,10 @@ func (d *Daemon) localHB() hbMsg {
 	s := d.hb.seq
 	d.hb.mu.Unlock()
 	return hbMsg{Role: st.Role, State: st.State, Epoch: st.Epoch, Seq: s, Mgmt: d.mgmtAddr(), TimeMs: time.Now().UnixMilli(), Ver: d.localVer, Plug: version,
-		Resync: st.State == StateStandby && st.PeerFP != "" && !activeValid(d.store.dir)}
+		Resync:  st.State == StateStandby && st.PeerFP != "" && (!activeValid(d.store.dir) || d.driftDetected()),
+		Links:   d.health.snapshotLinks(),
+		Health:  d.healthReason(),
+		Applied: st.AppliedSHA, Busy: d.opsBusy(), Maint: st.Maintenance, MaintUntil: st.MaintenanceUntil, MaintAt: st.MaintAt}
 }
 
 func (d *Daemon) handleHB(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +137,7 @@ func (d *Daemon) handleHB(w http.ResponseWriter, r *http.Request) {
 		d.peerWantsResync(m)
 		d.adjustClock(m)
 		d.checkVersions(m)
+		d.reconcileMaintenance(m)
 	}
 	writeJSON(w, 200, d.localHB())
 }
@@ -144,21 +171,20 @@ func (d *Daemon) hbPath(path string, addrOf func(State) string) {
 			pinned = st.PeerFP + addr
 		}
 		b, _ := json.Marshal(d.localHB())
+		t0 := time.Now()
 		resp, err := cl.Post("https://"+net.JoinHostPort(addr, fmt.Sprint(st.PeerPort))+"/v1/hb", "application/json", bytes.NewReader(b))
 		if err != nil {
 			continue
 		}
 		var m hbMsg
 		if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&m) == nil && resp.StatusCode == 200 {
+			d.hb.setRTT(path, time.Since(t0))
 			d.hb.seen(path, m)
 			d.learnPeerMgmt(m.Mgmt)
 			d.peerWantsResync(m)
 			d.adjustClock(m)
 			d.checkVersions(m)
-			d.checkVersions(m)
-			d.adjustClock(m)
-			d.checkVersions(m)
-			d.checkVersions(m)
+			d.reconcileMaintenance(m)
 		}
 		resp.Body.Close()
 	}
@@ -294,4 +320,13 @@ func (d *Daemon) versionInfo() (peer string, mismatch bool) {
 	d.verMu.Lock()
 	defer d.verMu.Unlock()
 	return d.peerVer, d.verMismatch
+}
+
+// opsBusy reports a promote/demote in progress on this node (they hold the ops lock).
+func (d *Daemon) opsBusy() bool {
+	if d.ops == nil || !d.ops.mu.TryLock() {
+		return d.ops != nil
+	}
+	d.ops.mu.Unlock()
+	return false
 }

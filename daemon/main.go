@@ -7,6 +7,8 @@ import (
 )
 
 func main() {
+	// rc, ssh and configd start us with different search paths; the tools we call live in /usr/local/{s,}bin
+	os.Setenv("PATH", "/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin")
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: hasyncd daemon | ctl <cmd> | version")
 		os.Exit(2)

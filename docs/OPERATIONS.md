@@ -64,3 +64,6 @@ By default pairing pins the PRIMARY node's current MAC on every data interface. 
 - Hiding the core "High Availability" menu is cosmetic; the pages stay reachable by URL.
 - Behaviour of the Intel X710 (`ixl`) on admin-down and the real boot window must be confirmed with `lab/hw-probe.sh` before production.
 - Tested with a real IKEv2/PSK site-to-site tunnel to a third OPNsense node (lab/tools/ipsec-lab.ps1): re-established through the new active node 5.9 s after a graceful failover and 6.2 s after a hard power-off of the active node (peer replaces the old IKE SA). dpinger with a monitored WAN gateway also follows the active role (stopped on the standby, restarted on promote). Not yet tested: traffic flowing through the tunnel during failover, peers other than OPNsense/strongSwan.
+
+## Failover timing (lab, Hyper-V, 4 interfaces + VLAN + LAGG)
+Manual failover: about 3.5 s from the PC's point of view (demote 0.3 s, interface reconfigure 2.5 s, pf + services 0.7 s), measured with a 50 ms ping. Earlier builds took about 6 s. The standby also waits while the peer reports it is promoting (heartbeat 'busy'), so a slow takeover can no longer cause a double promotion.

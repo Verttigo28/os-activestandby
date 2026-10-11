@@ -85,6 +85,7 @@ func (d *Daemon) serveCtl() error {
 		}
 		writeJSON(w, 200, map[string]string{"status": "ok", "message": msg})
 	})
+	d.registerCtl2(mux)
 	return http.Serve(l, mux)
 }
 
@@ -97,7 +98,11 @@ func (d *Daemon) ctlStatus(w http.ResponseWriter, r *http.Request) {
 		"local_fp": d.fp, "ha_address": d.haAddr, "listen_port": d.cfg.ListenPort,
 		"pairing_open": active, "state": st.State, "state_lost": st.Corrupt, "proxy_port": proxyPort(d.cfg), "auto_failover": d.cfg.autoOn(), "auto_blocked": d.auto.Blocked(),
 		"mgmt_address": d.mgmtAddr(), "peer_mgmt": st.PeerMgmt,
-		"os_version": d.localVer,
+		"os_version": d.localVer, "maintenance": d.maintenanceOn(), "maintenance_until": st.MaintenanceUntil,
+		"health": d.healthReason(), "drift": d.driftReason(), "fencing": d.cfg.FenceCommand != "", "preempt": d.cfg.Preempt,
+	}
+	if st.Job != nil {
+		out["job"] = st.Job
 	}
 	alive, ago, peer := d.hb.Snapshot()
 	if st.PeerFP != "" {
@@ -179,7 +184,15 @@ func runCtl(args []string) int {
 	peer := fs.String("peer", "", "")
 	token := fs.String("token", "", "")
 	force := fs.Bool("force", false, "")
-	fs.Parse(args[1:])
+	hours := fs.Int("hours", defaultMaintenanceHours, "")
+	failback := fs.Bool("failback", false, "")
+	sub := ""
+	if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
+		sub = args[1]
+		fs.Parse(args[2:])
+	} else {
+		fs.Parse(args[1:])
+	}
 
 	network, addr := ctlAddr()
 	cl := &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{
@@ -200,6 +213,23 @@ func runCtl(args []string) int {
 	case "pair":
 		b, _ := json.Marshal(map[string]string{"peer": *peer, "token": *token})
 		resp, err = cl.Post("http://ctl/pair", "application/json", bytes.NewReader(b))
+	case "health", "metrics", "history", "preflight":
+		resp, err = cl.Get("http://ctl/" + cmd)
+	case "maintenance": // maintenance on|off [--hours N]
+		on := "0"
+		if sub == "on" {
+			on = "1"
+		}
+		resp, err = cl.Post(fmt.Sprintf("http://ctl/maintenance?on=%s&hours=%d", on, *hours), "application/json", nil)
+	case "upgrade": // upgrade start [--failback] | cancel | status
+		switch sub {
+		case "start":
+			resp, err = cl.Post("http://ctl/upgrade/start?failback="+fmt.Sprint(*failback), "application/json", nil)
+		case "cancel":
+			resp, err = cl.Post("http://ctl/upgrade/cancel", "application/json", nil)
+		default:
+			resp, err = cl.Get("http://ctl/upgrade/status")
+		}
 	default:
 		fmt.Fprintln(os.Stderr, "unknown command", cmd)
 		return 2
@@ -219,6 +249,11 @@ func runCtl(args []string) int {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	fmt.Println(strings.TrimSpace(string(b)))
+	if cmd == "health" { // exit status for Monit: 0 ok, 1 warning, 2 critical
+		var h struct{ Level int }
+		json.Unmarshal(b, &h)
+		return h.Level
+	}
 	return 0
 }
 

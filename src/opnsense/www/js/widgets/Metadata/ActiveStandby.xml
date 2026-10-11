@@ -25,6 +25,9 @@
             <mgmt>management</mgmt>
             <held>Automatic failover is held back</held>
             <versions>Versions differ</versions>
+            <maintenance>Maintenance</maintenance>
+            <maintenanceon>MAINTENANCE MODE</maintenanceon>
+            <problems>Problem</problems>
         </translations>
     </activestandby>
 </metadata>

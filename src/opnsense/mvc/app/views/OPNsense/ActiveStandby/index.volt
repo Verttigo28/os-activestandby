@@ -25,6 +25,70 @@
             return t;
         }
 
+        function setTile(id, dot, text, sub) {
+            $('#' + id + 'Dot').attr('class', 'as-dot ' + dot);
+            $('#' + id).text(text);
+            $('#' + id + 'Sub').text(sub || '');
+        }
+
+        function renderTiles(s) {
+            const paired = s.role === 'master' || s.role === 'standby';
+            const standby = paired && s.state === 'standby';
+            $('#asLoading').hide();
+            $('#hero').toggle(true);
+            $('#standbyUi').toggle(standby);
+            $('#fullUi').toggle(!standby);
+            if (!paired) {
+                setTile('tRole', 'idle', '{{ lang._('Not paired') }}', '{{ lang._('Use the setup wizard to create a pair') }}');
+                setTile('tPeer', '', '-', '');
+                setTile('tSync', '', '-', '');
+                setTile('tProt', '', '{{ lang._('Off') }}', '');
+                return;
+            }
+            const role = s.role === 'master' ? '{{ lang._('primary') }}' : '{{ lang._('secondary') }}';
+            if (s.state === 'active') {
+                setTile('tRole', 'ok', '{{ lang._('ACTIVE') }}', '{{ lang._('Handles all traffic') }} · ' + role);
+            } else {
+                setTile('tRole', 'idle', '{{ lang._('STANDBY') }}', '{{ lang._('Waiting as backup') }} · ' + role);
+            }
+            if (s.peer_alive) {
+                setTile('tPeer', 'ok', s.peer_state === 'active' ? '{{ lang._('ACTIVE') }}' : '{{ lang._('STANDBY') }}', (s.peer_addr || '') + ' · ' + (s.peer_last_hb_ms !== undefined ? s.peer_last_hb_ms + ' ms ago' : ''));
+            } else {
+                setTile('tPeer', 'bad', '{{ lang._('NOT RESPONDING') }}', s.peer_addr || '');
+            }
+            const y = s.sync || {};
+            if (y.state === 'in_sync') { setTile('tSync', 'ok', '{{ lang._('In sync') }}', '{{ lang._('revision') }} ' + y.rev); }
+            else if (y.state === 'behind') { setTile('tSync', 'warn', y.behind + ' {{ lang._('behind') }}', y.error || ''); }
+            else { setTile('tSync', 'bad', '{{ lang._('FAILED') }}', y.error || ''); }
+            if (s.maintenance) { setTile('tProt', 'warn', '{{ lang._('Paused') }}', '{{ lang._('maintenance mode') }}'); }
+            else if (!s.auto_failover) { setTile('tProt', 'warn', '{{ lang._('Manual only') }}', '{{ lang._('automatic failover is off') }}'); }
+            else if (s.health || s.drift || s.auto_blocked) { setTile('tProt', 'warn', '{{ lang._('Attention') }}', s.health || s.drift || s.auto_blocked); }
+            else { setTile('tProt', 'ok', '{{ lang._('Armed') }}', (s.preempt ? '{{ lang._('automatic failover + preemption') }}' : '{{ lang._('automatic failover') }}') + (s.fencing ? ' · {{ lang._('fencing') }}' : '')); }
+            $('#peerDownBox').toggle(standby && !s.peer_alive);
+        }
+
+        function takeover(force) {
+            $('#takeResult').attr('class', 'alert alert-info').html('<i class="fa fa-spinner fa-spin"></i> {{ lang._('Taking over...') }}').show();
+            $('#btnTakeover, #btnTakeoverForce').prop('disabled', true);
+            ajaxCall(force ? '/api/activestandby/pairing/promote' : '/api/activestandby/pairing/failover', force ? {force: '1'} : {}, function (r) {
+                $('#btnTakeover, #btnTakeoverForce').prop('disabled', false);
+                showResult('#takeResult', r);
+                refreshStatus();
+                if (r.error && r.error.indexOf('would lose') >= 0) {
+                    stdDialogConfirm('{{ lang._('Unreplicated changes') }}', r.error + ' {{ lang._('Force the failover anyway and lose those changes?') }}', '{{ lang._('Force') }}', '{{ lang._('Cancel') }}', function () {
+                        ajaxCall('/api/activestandby/pairing/failover', {force: '1'}, function (r2) { showResult('#takeResult', r2); refreshStatus(); });
+                    });
+                }
+            });
+        }
+        $('#btnTakeover').click(function () {
+            stdDialogConfirm('{{ lang._('Make this firewall active') }}', '{{ lang._('The other firewall becomes the standby and this one takes over all traffic. Continue?') }}', '{{ lang._('Make active') }}', '{{ lang._('Cancel') }}', function () { takeover(false); });
+        });
+        $('#btnTakeoverForce').click(function () {
+            stdDialogConfirm('{{ lang._('Force active') }}', '{{ lang._('Take over WITHOUT asking the other firewall. If it is still running, both will fight over the same addresses. Continue?') }}', '{{ lang._('Force') }}', '{{ lang._('Cancel') }}', function () { takeover(true); });
+        });
+        $('#toggleSbEvents').click(function (e) { e.preventDefault(); $('#sbEvents').toggle(); });
+
         function refreshStatus() {
             ajaxGet('/api/activestandby/pairing/status', {}, function (s) {
                 let rows = [
@@ -41,8 +105,14 @@
                 ];
                 if (s.error) { rows.push(['{{ lang._('Error') }}', esc(s.error)]); }
                 $('#statusTable tbody').html(rows.map(r => '<tr><td>' + r[0] + '</td><td>' + (r[0] === '{{ lang._('Certificate fingerprint') }}' ? r[1] : esc(r[1])) + '</td></tr>').join(''));
-                $('#bannerStandby').toggle(s.state === 'standby' && s.role !== 'standalone');
+                renderTiles(s);
                 $('#bannerLost').toggle(!!s.state_lost);
+                $('#bannerMaint').toggle(!!s.maintenance);
+                const problems = [];
+                if (s.health) { problems.push('{{ lang._('Health problem on the active node') }}: ' + s.health); }
+                if (s.drift) { problems.push('{{ lang._('Configuration drift') }}: ' + s.drift); }
+                if (s.auto_blocked) { problems.push(s.auto_blocked); }
+                $('#bannerProblem').html(problems.map(p => '<div>' + esc(p) + '</div>').join('')).toggle(problems.length > 0);
                 $('#bannerVersion').toggle(!!s.version_mismatch);
                 $('#btnBreak').toggle(s.role === 'master' || s.role === 'standby');
                 $('#haActions').toggle(s.role === 'master' || s.role === 'standby');
@@ -52,7 +122,7 @@
         function refreshEvents() {
             ajaxGet('/api/activestandby/pairing/events', {}, function (r) {
                 const col = {error: 'danger', warning: 'warning', change: 'info', info: ''};
-                $('#evTable tbody').html((r.events || []).map(e => '<tr class="' + (col[e.kind] || '') + '"><td>' + esc(e.time.replace('T', ' ').replace('Z', '')) + '</td><td>' + esc(e.msg) + '</td></tr>').join(''));
+                var evh = (r.events || []).map(e => '<tr class="' + (col[e.kind] || '') + '"><td>' + esc(e.time.replace('T', ' ').replace('Z', '')) + '</td><td>' + esc(e.msg) + '</td></tr>').join(''); $('#evTable tbody, #evTable2 tbody').html(evh);
             });
         }
         refreshEvents();
@@ -115,18 +185,62 @@
     });
 </script>
 
+<style>
+    .as-tiles { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 18px 0; }
+    .as-tile { flex: 1 1 200px; border: 1px solid rgba(128,128,128,.35); border-radius: 6px; padding: 12px 16px; min-width: 190px; }
+    .as-tile .as-k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; opacity: .65; }
+    .as-tile .as-v { font-size: 22px; font-weight: 600; line-height: 1.3; }
+    .as-tile .as-s { font-size: 12px; opacity: .75; min-height: 16px; }
+    .as-dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 8px; background: #999; }
+    .as-dot.ok { background: #3c9d4e; } .as-dot.warn { background: #e0a100; } .as-dot.bad { background: #d9534f; } .as-dot.idle { background: #5b8fd6; }
+    #standbyUi .as-big { padding: 34px 10px 10px 10px; text-align: center; }
+    #standbyUi .btn-lg { padding: 16px 34px; font-size: 20px; margin: 14px 0; }
+</style>
+
+<div id="asLoading" class="content-box" style="padding:30px"><i class="fa fa-spinner fa-spin"></i> {{ lang._('Loading...') }}</div>
+
+<div id="hero" style="display:none">
+    <div class="as-tiles">
+        <div class="as-tile"><div class="as-k">{{ lang._('This firewall') }}</div><div class="as-v"><span class="as-dot" id="tRoleDot"></span><span id="tRole">-</span></div><div class="as-s" id="tRoleSub"></div></div>
+        <div class="as-tile"><div class="as-k">{{ lang._('Other firewall') }}</div><div class="as-v"><span class="as-dot" id="tPeerDot"></span><span id="tPeer">-</span></div><div class="as-s" id="tPeerSub"></div></div>
+        <div class="as-tile"><div class="as-k">{{ lang._('Configuration sync') }}</div><div class="as-v"><span class="as-dot" id="tSyncDot"></span><span id="tSync">-</span></div><div class="as-s" id="tSyncSub"></div></div>
+        <div class="as-tile"><div class="as-k">{{ lang._('Failover protection') }}</div><div class="as-v"><span class="as-dot" id="tProtDot"></span><span id="tProt">-</span></div><div class="as-s" id="tProtSub"></div></div>
+    </div>
+    <div id="bannerMaint" class="alert alert-info" style="display:none">{{ lang._('MAINTENANCE MODE is on: automatic failover, preemption and health switching are paused on both nodes. Switch it off under Operations when you are done.') }}</div>
+    <div id="bannerProblem" class="alert alert-danger" style="display:none"></div>
+    <div id="bannerVersion" class="alert alert-warning" style="display:none">{{ lang._('The two nodes run different OPNsense or plugin versions. This is expected while updating one node. Finish updating both; configuration sync is refused across core versions.') }}</div>
+    <div id="bannerLost" class="alert alert-danger" style="display:none">{{ lang._('The saved HA state of this node was unreadable. It runs as a silent standby without a peer. Break the pair and pair again.') }}</div>
+</div>
+
+<div id="standbyUi" class="content-box" style="display:none">
+    <div class="col-md-12 as-big">
+        <h2>{{ lang._('This firewall is the standby') }}</h2>
+        <p class="text-muted" style="font-size:15px">{{ lang._('The other firewall is active and handles all traffic. Its configuration is copied here automatically; make changes on the active firewall only.') }}</p>
+        <button class="btn btn-primary btn-lg" id="btnTakeover"><i class="fa fa-exchange"></i> {{ lang._('Make this firewall the active one') }}</button>
+        <p class="text-muted">{{ lang._('The active firewall hands over cleanly. Traffic is interrupted for a few seconds.') }}</p>
+        <div id="takeResult" class="alert" style="display:none; max-width:700px; margin:10px auto"></div>
+        <div id="peerDownBox" style="display:none; margin-top:20px">
+            <p class="text-danger"><b>{{ lang._('The active firewall does not answer.') }}</b> {{ lang._('If it is really down you can take over without its help.') }}</p>
+            <button class="btn btn-danger" id="btnTakeoverForce">{{ lang._('Emergency: force this firewall active') }}</button>
+        </div>
+        <p style="margin-top:30px"><a href="#" id="toggleSbEvents">{{ lang._('Show recent events') }}</a></p>
+        <div id="sbEvents" style="display:none; text-align:left; max-width:900px; margin:0 auto">
+            <table class="table table-condensed table-striped" id="evTable2"><thead><tr><th>{{ lang._('Time (UTC)') }}</th><th>{{ lang._('Event') }}</th></tr></thead><tbody></tbody></table>
+        </div>
+    </div>
+</div>
+
+<div id="fullUi" style="display:none">
 <ul class="nav nav-tabs" data-tabs="tabs" id="maintabs">
     <li><a data-toggle="tab" href="#wizard">{{ lang._('Setup wizard') }}</a></li>
     <li class="active"><a data-toggle="tab" href="#status">{{ lang._('Status and Pairing') }}</a></li>
+    <li><a data-toggle="tab" href="#operations">{{ lang._('Operations') }}</a></li>
     <li><a data-toggle="tab" href="#settings">{{ lang._('Settings') }}</a></li>
 </ul>
 <div class="tab-content content-box">
     <div id="status" class="tab-pane fade in active">
         <div class="col-md-12">
-            <div id="bannerStandby" class="alert alert-warning" style="display:none">{{ lang._('This node is STANDBY. Changes made here are overwritten by the active node; make configuration changes on the active node.') }}</div>
-            <div id="bannerVersion" class="alert alert-warning" style="display:none">{{ lang._('The two nodes run different OPNsense or plugin versions. This is expected while updating one node. Finish updating both; configuration sync is refused across core versions.') }}</div>
-            <div id="bannerLost" class="alert alert-danger" style="display:none">{{ lang._('The saved HA state of this node was unreadable. It runs as a silent standby without a peer. Break the pair and pair again.') }}</div>
-            <h2>{{ lang._('Node status') }}</h2>
+            <h2>{{ lang._('Details') }}</h2>
             <table class="table table-condensed" id="statusTable" style="max-width:700px"><tbody></tbody></table>
             <div id="haActions" style="display:none; margin-bottom:10px">
                 <button class="btn btn-warning" id="btnFailover">{{ lang._('Failover now') }}</button>
@@ -167,6 +281,7 @@
         </div>
     </div>
     {{ partial("OPNsense/ActiveStandby/wizard") }}
+    {{ partial("OPNsense/ActiveStandby/operations") }}
     <div id="settings" class="tab-pane fade in">
         {{ partial("layout_partials/base_form", ['fields': generalForm, 'id': 'frm_general']) }}
         <div class="col-md-12">
@@ -174,4 +289,5 @@
             <button class="btn btn-primary" id="saveAct" type="button"><b>{{ lang._('Save') }}</b></button>
         </div>
     </div>
+</div>
 </div>

@@ -134,8 +134,17 @@ func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rev, _ := strconv.ParseUint(r.Header.Get("X-Rev"), 10, 64)
-	if rev <= st.SyncRev && r.Header.Get("X-Force") != "1" {
-		http.Error(w, fmt.Sprintf("stale revision %d (have %d)", rev, st.SyncRev), 409)
+	// Only the active node pushes, one revision at a time, so ordering is not a safety issue. A revision number we already
+	// have must never wedge the sync (e.g. the ack of a push got lost when a daemon restarted): content we already applied
+	// is acknowledged as a no-op (unless drift was detected, then it is applied again), anything else is applied.
+	if sha := r.Header.Get("X-SHA256"); sha != "" && sha == st.AppliedSHA && !d.driftDetected() && activeValid(d.store.dir) {
+		d.store.Update(func(s *State) {
+			if rev > s.SyncRev {
+				s.SyncRev = rev
+			}
+			s.SyncError = ""
+		})
+		w.WriteHeader(200)
 		return
 	}
 	zr, err := gzip.NewReader(io.LimitReader(r.Body, 64<<20))
@@ -165,7 +174,10 @@ func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("sync: revision %d applied (%s)", rev, r.Header.Get("X-SHA256")[:12])
 	d.store.Update(func(s *State) {
-		s.SyncRev, s.AppliedRev, s.AppliedSHA, s.SyncError = rev, rev, r.Header.Get("X-SHA256"), ""
+		if rev > s.SyncRev {
+			s.SyncRev = rev
+		}
+		s.AppliedRev, s.AppliedSHA, s.SyncError = rev, r.Header.Get("X-SHA256"), ""
 		s.SyncOK = time.Now().UTC().Format(time.RFC3339)
 	})
 	w.WriteHeader(200)
@@ -228,6 +240,7 @@ func (d *Daemon) applyConfig(xml []byte) error {
 	}
 	d.enforceOnce() // belt and braces: nothing may have come up
 	os.Rename(incoming, filepath.Join(dir, "last-incoming.xml"))
+	d.recordIntegrity()
 	return nil
 }
 

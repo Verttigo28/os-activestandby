@@ -23,7 +23,7 @@ find "$STAGE/usr/local" -type f -exec chmod 0644 {} +
 chmod 0755 "$STAGE/usr/local/sbin/hasyncd" "$STAGE/usr/local/etc/rc.d/hasyncd" \
     "$STAGE"/usr/local/etc/rc.syshook.d/early/05-activestandby \
     "$STAGE"/usr/local/etc/rc.syshook.d/config/50-activestandby \
-    "$STAGE"/usr/local/opnsense/scripts/OPNsense/ActiveStandby/*.php
+    "$STAGE"/usr/local/opnsense/scripts/OPNsense/ActiveStandby/*.php "$STAGE"/usr/local/opnsense/scripts/OPNsense/ActiveStandby/*.sh
 
 # ---- plist (paths relative to the prefix /usr/local) ----
 (
