@@ -42,7 +42,9 @@ type State struct {
 	MaintAt          string `json:"maint_at,omitempty"`          // time of the last change; the newest change wins between the nodes
 	// Integrity hashes of the files this daemon wrote on a standby; a mismatch means someone changed them (drift).
 	ActiveSHA string `json:"active_sha,omitempty"`
-	ViewSHA   string `json:"view_sha,omitempty"`
+	// SettingsSHA fingerprints the shared plugin settings last applied here; a change re-renders the daemon config and restarts it.
+	SettingsSHA string `json:"settings_sha,omitempty"`
+	ViewSHA     string `json:"view_sha,omitempty"`
 	// Job is the guided upgrade in progress, if any (see upgrade.go). Persisted so it survives reboots and failovers.
 	Job *Job `json:"job,omitempty"`
 	// Kit: a secondary kit was handed out and this (standalone) node pairs with that peer as soon as it answers.

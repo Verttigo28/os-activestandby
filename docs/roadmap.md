@@ -11,9 +11,8 @@ Open items, most valuable first. Done items live in the [changelog](../CHANGELOG
 ## Strongly recommended
 
 4. **Role-based permissions** beyond view/full: separate "failover" and "break pair" privileges.
-5. **Shared timing settings**: plugin settings are per node today; timing and monitoring settings should replicate.
-6. **Signed packages** and a package repository.
-7. **Captive-portal and roaming-VPN session sync.**
+5. **Signed packages** and a package repository.
+6. **Captive-portal and roaming-VPN session sync.**
 
 ## Nice to have
 

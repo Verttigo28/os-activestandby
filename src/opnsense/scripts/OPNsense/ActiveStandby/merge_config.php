@@ -8,7 +8,7 @@
  * THIS node back in. Node-local (never replicated):
  *   - system/hostname
  *   - interfaces/<HA link key> and interfaces/<management key> (each node has its own IP there)
- *   - OPNsense/ActiveStandby (this plugin's own settings)
+ *   - from OPNsense/ActiveStandby only: enabled, ha_interface, mgmt_interface, listen_port (everything else is shared)
  * The keys of the HA/management interfaces are read from the LOCAL file. Pure DOM, no framework.
  */
 
@@ -39,7 +39,7 @@ if ($mx->query('/opnsense/interfaces')->length === 0 || $mx->query('/opnsense/sy
     fail('active config has no interfaces/system section, refusing');
 }
 
-$paths = ['/opnsense/system/hostname', '/opnsense/OPNsense/ActiveStandby'];
+$paths = ['/opnsense/system/hostname'];
 foreach (['ha_interface', 'mgmt_interface'] as $f) {
     $k = trim($lx->evaluate("string(/opnsense/OPNsense/ActiveStandby/general/$f)"));
     if ($k !== '' && preg_match('/^[a-z0-9_]+$/i', $k)) {
@@ -77,6 +77,50 @@ foreach ($paths as $p) {
         $parent = $next;
     }
     $parent->appendChild($imp);
+}
+
+// This plugin's settings are shared: the active node's values (timing, health, probes, notifications, ...) replace
+// ours, so they are changed in one place. Only what is specific to THIS node stays local: whether the service is
+// enabled, which interfaces are the HA link and management, and the peer API port.
+$ml = $mx->query('/opnsense/OPNsense/ActiveStandby/general')->item(0);
+$ll = $lx->query('/opnsense/OPNsense/ActiveStandby/general')->item(0);
+if ($ll !== null) {
+    if ($ml === null) {
+        // the active node has no settings of its own yet: keep ours as they are
+        $opn = $mx->query('/opnsense/OPNsense')->item(0);
+        if ($opn === null) {
+            $opn = $m->documentElement->appendChild($m->createElement('OPNsense'));
+        }
+        $as = $mx->query('/opnsense/OPNsense/ActiveStandby')->item(0);
+        if ($as === null) {
+            $as = $opn->appendChild($m->createElement('ActiveStandby'));
+        }
+        $as->appendChild($m->importNode($ll, true));
+    } else {
+        foreach (['enabled', 'ha_interface', 'mgmt_interface', 'listen_port'] as $f) {
+            $mine = null;
+            foreach ($ll->childNodes as $c) {
+                if ($c->nodeName === $f) {
+                    $mine = $c;
+                }
+            }
+            $theirs = null;
+            foreach ($ml->childNodes as $c) {
+                if ($c->nodeName === $f) {
+                    $theirs = $c;
+                }
+            }
+            if ($mine === null) {
+                if ($theirs !== null) {
+                    $ml->removeChild($theirs);
+                }
+            } elseif ($theirs === null) {
+                $ml->appendChild($m->importNode($mine, true));
+            } else {
+                $ml->replaceChild($m->importNode($mine, true), $theirs);
+            }
+        }
+    }
 }
 
 // the one-time pairing key from a secondary kit is spent once the node is paired: do not keep it

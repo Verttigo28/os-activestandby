@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -241,6 +243,7 @@ func (d *Daemon) applyConfig(xml []byte) error {
 		return rollback(fmt.Errorf("filter reload: %v: %s", err, o))
 	}
 	d.enforceOnce() // belt and braces: nothing may have come up
+	d.applySettingsChange(full)
 	os.Rename(incoming, filepath.Join(dir, "last-incoming.xml"))
 	d.recordIntegrity()
 	return nil
@@ -332,4 +335,47 @@ func (d *Daemon) applyPinned(out string) {
 			announce(i.Dev)
 		}
 	}
+}
+
+var (
+	settingsRe  = regexp.MustCompile(`(?s)<ActiveStandby[ >].*?</ActiveStandby>`)
+	nodeLocalRe = regexp.MustCompile(`<(enabled|ha_interface|mgmt_interface|listen_port|pair_token|pair_expires)>[^<]*</(enabled|ha_interface|mgmt_interface|listen_port|pair_token|pair_expires)>|<(enabled|ha_interface|mgmt_interface|listen_port|pair_token|pair_expires)/>`)
+)
+
+// applySettingsChange: the plugin settings are shared (see merge_config.php). When the ones that came with the new
+// revision differ from what this node runs with, the daemon configuration is rendered again and the daemon restarted
+// (detached: it is restarting itself). Changes are rare and the state is persisted, so the restart costs about a second.
+func (d *Daemon) applySettingsChange(full string) {
+	sha := settingsFingerprint(full)
+	if sha == "" {
+		return
+	}
+	if d.store.Get().SettingsSHA == sha {
+		return
+	}
+	d.store.Update(func(s *State) { s.SettingsSHA = sha })
+	go func() {
+		if out, err := sh("configctl", "template", "reload", "OPNsense/ActiveStandby"); err != nil {
+			log.Printf("settings: template reload: %v: %s", err, out)
+			return
+		}
+		// restart only when what the daemon runs with really differs from what the shared settings now say
+		now, cur := loadConfig(), d.cfg
+		nb, _ := json.Marshal(now)
+		cb, _ := json.Marshal(cur)
+		if string(nb) == string(cb) {
+			return
+		}
+		d.event("change", "plugin settings changed on the active node: applying them here (daemon restart)")
+		exec.Command("daemon", "-f", "sh", "-c", "sleep 1; service hasyncd restart").Start()
+	}()
+}
+
+// settingsFingerprint hashes the shared part of this plugin's settings in a config file ("" if unreadable).
+func settingsFingerprint(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return shaHex(nodeLocalRe.ReplaceAll(settingsRe.Find(b), nil))
 }

@@ -4,8 +4,8 @@
 
 - **Edit the configuration on the active node only.** It replicates to the standby within about a second. The standby's configuration is locked (immutable `config.xml`): changes made there do not reach disk, and a banner in the status bar says "STANDBY" on every page.
 - The *Status* page shows both nodes, sync state, failover protection and recent events. On a standby it shows only a single button, **Make this firewall the active one**; if the active node does not answer, an emergency option appears.
-- Node-local and never replicated: hostname, the HA link and management interface definitions, this plugin's settings, `/conf/activestandby/*`. Everything else in `config.xml` is replicated, plus the list of installed `os-*` plugins, DHCP leases, firewall states and GUI sessions.
-- Plugin settings are per node. Change them on the active node; make a node active first if you need to edit them on the other one.
+- Node-local and never replicated: hostname, the HA link and management interface definitions, whether the service is enabled and its port, `/conf/activestandby/*`. Everything else in `config.xml` is replicated, plus the list of installed `os-*` plugins, DHCP leases, firewall states and GUI sessions.
+- Plugin settings are **shared**: change them on the active node and the standby adopts them within seconds (it restarts its daemon once). Per node: whether the service is enabled, the HA and management interface choice and the peer port.
 
 ## What happens when
 

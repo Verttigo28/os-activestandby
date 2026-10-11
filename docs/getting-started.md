@@ -36,7 +36,7 @@ The kit is the primary's configuration in its *silent standby form* (data interf
 1. Run the wizard on both nodes. On the secondary choose *Secondary* and **Open pairing window**: it shows its address and a one-time token.
 2. On the primary choose *Primary*, enter the secondary's HA address and the token, **Pair**.
 
-In both cases: the **primary** keeps its configuration and is active first; the **secondary** starts as standby and its configuration (except hostname, HA and management interface, plugin settings) is replaced by the primary's.
+In both cases: the **primary** keeps its configuration and is active first; the **secondary** starts as standby and its configuration (except hostname and the HA and management interface) is replaced by the primary's.
 
 ## Check
 

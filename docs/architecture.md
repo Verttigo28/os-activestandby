@@ -51,7 +51,7 @@ Every promotion increments an epoch. If two nodes are ever active together, the 
 
 ## Replication
 
-The active node pushes its whole `config.xml` as a numbered, compressed revision after every save (config syshook) and on a timer. The standby merges it with its node-local parts (hostname, HA and management interface, this plugin's settings), applies it, reloads pf only and acknowledges; on any error it rolls back and reports. Revisions are idempotent and checksummed. Drift detection compares what the daemon wrote with what is on disk.
+The active node pushes its whole `config.xml` as a numbered, compressed revision after every save (config syshook) and on a timer. The standby merges it with its node-local parts (hostname, HA and management interface, enabled flag and port), applies it, reloads pf only and acknowledges; on any error it rolls back and reports. Revisions are idempotent and checksummed. Drift detection compares what the daemon wrote with what is on disk.
 
 Also replicated: the set of installed `os-*` plugins (the standby installs missing ones through a restricted proxy on the active node), DHCP lease files, firewall states (pfsync) and GUI sessions.
 
