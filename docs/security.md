@@ -33,7 +33,7 @@
 ## Things to know
 
 - The secondary kit is a full configuration backup with a pairing token inside: it holds password hashes and keys. It expires after 48 hours but delete it after use, and move it over a trusted channel.
-- Release packages are not signed. Verify the SHA-256 published with each release.
+- Releases carry a signed build attestation (`gh attestation verify`) and a SHA-256 list; a signed pkg repository is available once the maintainer has configured the signing key (see [building](building.md#signing)).
 - A paired peer is trusted. Protect both nodes as one unit: the HA cable should not leave the rack, and the management network should be restricted.
 - Place a firewall rule on the HA link that allows only the peer, and keep the peer API port (default 7690) closed on every other interface; the daemon does not listen there anyway.
 - Not covered: IPv6 neighbour announcements, encryption of pfsync (use a dedicated cable or an IPsec-protected link).

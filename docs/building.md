@@ -41,3 +41,40 @@ environment; the prebuilt `src/sbin/hasyncd` must be present and executable.
 ## Emergency / uninstall
 `hasyncd ctl break` on both nodes returns them to standalone. A former standby keeps its data interfaces disabled in `config.xml`: restore a backup
 (`/conf/backup/`) or `/conf/activestandby/active.xml` and review IPs before connecting it to the network.
+
+## Signing
+
+Every release is protected in two independent ways.
+
+**1. Build provenance (always on).** CI attaches a signed GitHub attestation to the `.pkg`. Anyone can check that the file was built by this repository's workflow from the tagged commit:
+```sh
+gh attestation verify os-activestandby-<version>.pkg --repo Verttigo28/opn-betterHA
+```
+`SHA256SUMS` is published next to the package as well.
+
+**2. A signed pkg repository (once the key exists).** `pkg` signs a repository catalog, not single files. CI builds the repository with your private key and publishes it on the `gh-pages` branch; clients then use `pkg install`/`pkg upgrade` with signature checking.
+
+One-time setup by the maintainer:
+1. `sh build/gen-signing-key.sh` creates `repo.key` (private) and `keys/activestandby.pub` (public) and prints the key fingerprint. Commit `keys/activestandby.pub`, never `repo.key`.
+2. GitHub, repository **Settings > Secrets and variables > Actions > New repository secret**: name `PKG_SIGNING_KEY`, value the complete content of `repo.key` including the `-----BEGIN` and `-----END` lines. Store `repo.key` in a password manager or delete it from the workstation.
+3. GitHub, **Settings > Pages**: source *Deploy from a branch*, branch `gh-pages`, folder `/ (root)`. The branch appears after the first tagged build with the secret set.
+4. Publish the key fingerprint in the README so users can compare it.
+
+Without the secret the release still works (steps 1 above only); the repository steps are skipped.
+
+Client setup (each firewall):
+```sh
+fetch -o /usr/local/etc/pkg/keys/activestandby.pub https://raw.githubusercontent.com/Verttigo28/opn-betterHA/main/keys/activestandby.pub
+cat > /usr/local/etc/pkg/repos/activestandby.conf <<'CONF'
+activestandby: {
+  url: "https://verttigo28.github.io/opn-betterHA",
+  signature_type: "pubkey",
+  pubkey: "/usr/local/etc/pkg/keys/activestandby.pub",
+  enabled: yes
+}
+CONF
+pkg update -r activestandby && pkg install -r activestandby os-activestandby
+```
+(create `/usr/local/etc/pkg/keys` and `/usr/local/etc/pkg/repos` if they do not exist; compare the key's fingerprint with the one in the README before trusting it.)
+
+Rotating the key: generate a new pair, replace the secret and `keys/activestandby.pub`, tell users to replace the public key; the next release re-signs the catalog.

@@ -10,3 +10,5 @@ dist/
 lab/tools/*.out
 *.pkg
 .idea/
+repo.key
+repo.pub

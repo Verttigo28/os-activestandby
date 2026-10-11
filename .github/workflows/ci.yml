@@ -79,32 +79,66 @@ jobs:
           done
 
   package:
-    name: build the .pkg (tags only)
+    name: build and sign the .pkg (tags only)
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [go, plugin]
     permissions:
-      contents: write # create the GitHub release and upload the .pkg
+      contents: write      # create the GitHub release, publish the pkg repository branch
+      id-token: write      # build provenance attestation
+      attestations: write
     runs-on: ubuntu-latest
+    env:
+      PKG_SIGNING_KEY: ${{ secrets.PKG_SIGNING_KEY }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: src-with-daemon
           path: .
-      - name: build the package on FreeBSD
+      - name: signed pkg repository: start from what is already published
+        id: repo
+        if: env.PKG_SIGNING_KEY != ''
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          ref: gh-pages
+          path: dist/repo
+      - name: build the package (and the signed repository) on FreeBSD
         uses: vmactions/freebsd-vm@v1
         with:
           release: '14.3'
           usesh: true
+          envs: 'PKG_SIGNING_KEY'
           run: |
+            set -e
             VERSION="${GITHUB_REF_NAME#v}"
             chmod +x src/sbin/hasyncd
             sh build/build-pkg.sh "$PWD" "$VERSION" "$PWD/dist"
+            if [ -n "$PKG_SIGNING_KEY" ]; then
+              mkdir -p dist/repo/All
+              cp dist/os-activestandby-*.pkg dist/repo/All/
+              umask 077
+              printf '%s\n' "$PKG_SIGNING_KEY" > /tmp/repo.key
+              pkg repo dist/repo /tmp/repo.key
+              rm -f /tmp/repo.key
+            fi
       - name: checksums
         run: cd dist && sha256sum os-activestandby-*.pkg > SHA256SUMS
+      - name: signed provenance for the package (verify with gh attestation verify)
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/os-activestandby-*.pkg
       - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
             dist/os-activestandby-*.pkg
             dist/SHA256SUMS
+      - name: publish the signed pkg repository (GitHub Pages branch gh-pages)
+        if: env.PKG_SIGNING_KEY != ''
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: dist/repo
+          keep_files: true
+          exclude_assets: '.git'

@@ -18,7 +18,7 @@ grep os-activestandby SHA256SUMS      # compare with: sha256 os-activestandby-<v
 pkg add os-activestandby-<version>.pkg
 ```
 
-The package is unsigned, so the checksum matters. Reload the GUI: the page is under **System > Active/Standby HA** and the built-in High Availability menu is hidden.
+Verify the download: compare the checksum, or better `gh attestation verify os-activestandby-<version>.pkg --repo Verttigo28/opn-betterHA`. With the signed pkg repository set up (see [building](building.md#signing)) `pkg install` checks the signature itself. Reload the GUI: the page is under **System > Active/Standby HA** and the built-in High Availability menu is hidden.
 
 ## Set up the pair
 

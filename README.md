@@ -67,7 +67,7 @@ Details: [getting started](docs/getting-started.md), [operations](docs/operation
 - OPNsense 26.7 or newer (FreeBSD 15), two machines with identical NIC names, same OPNsense and plugin versions. Pairing refuses anything else.
 - Static IPv4 on the shared interfaces. DHCP/PPPoE WANs work only where the provider tolerates the MAC and a short re-login. IPv6 neighbour announcements are not implemented.
 - Not for use together with the built-in CARP/XMLRPC HA.
-- The package is unsigned: verify the SHA-256 published with each release.
+- Releases carry a signed build attestation and SHA-256 checksums; a signed pkg repository is supported, see [building](docs/building.md#signing).
 
 ## Repository layout
 
