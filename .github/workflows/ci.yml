@@ -125,6 +125,8 @@ jobs:
       - name: checksums
         run: cd dist && sha256sum os-activestandby-*.pkg > SHA256SUMS
       - name: signed provenance for the package (verify with gh attestation verify)
+        if: ${{ !github.event.repository.private }} # GitHub offers attestations for public repositories only (or paid plans)
+        continue-on-error: true
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: dist/os-activestandby-*.pkg

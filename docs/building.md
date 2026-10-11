@@ -46,7 +46,7 @@ environment; the prebuilt `src/sbin/hasyncd` must be present and executable.
 
 Every release is protected in two independent ways.
 
-**1. Build provenance (always on).** CI attaches a signed GitHub attestation to the `.pkg`. Anyone can check that the file was built by this repository's workflow from the tagged commit:
+**1. Build provenance (public repositories).** GitHub only offers attestations for public repositories (or paid plans); CI skips the step otherwise. CI attaches a signed GitHub attestation to the `.pkg`. Anyone can check that the file was built by this repository's workflow from the tagged commit:
 ```sh
 gh attestation verify os-activestandby-<version>.pkg --repo Verttigo28/opn-betterHA
 ```
