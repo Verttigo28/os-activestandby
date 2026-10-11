@@ -61,10 +61,10 @@ Settings tab (some under *advanced*):
 
 ## Manual operations
 
-- **Failover now**: graceful switch from either node. Forcing a role is console-only (`hasyncd ctl promote --force`, `demote`): it risks split-brain.
+- **Failover now**: graceful switch from either node. Forcing a role is console-only (`hasyncd ctl promote --force`, `demote`): it risks split-brain. The only exception is the emergency takeover offered on a standby whose active node is silent.
 - A full resync (`hasyncd ctl resync`) pushes the complete config again; a damaged saved config on the standby triggers it automatically.
 - **Break pair**: both nodes become standalone. A former standby keeps its disabled data interfaces: restore a backup (`/conf/backup/`) or `/conf/activestandby/active.xml` and review the addresses before connecting it.
-- Console: `hasyncd ctl status|events|failover|promote [--force]|demote|resync|break|maintenance on|off|preflight|history|health|metrics|upgrade start|unlock|lock` (forced promote, demote and resync are console-only)`.
+- Console: `hasyncd ctl status|events|failover|promote [--force]|demote|resync|break|maintenance on|off|preflight|history|health|metrics|upgrade start|unlock|lock` (forced promote, demote and resync are console-only).
 
 ## Files and logs
 
