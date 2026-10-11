@@ -12,3 +12,8 @@ lab/tools/*.out
 .idea/
 repo.key
 repo.pub
+*.key
+*.pem
+apikeys.json
+.env
+lab/tools/*.json

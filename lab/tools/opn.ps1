@@ -23,7 +23,13 @@ function Opn-Sh([string]$n, [string]$body) {
 # REST helper: Api a GET /api/activestandby/pairing/status ; Api a POST /api/... 'k=v&k2=v2'
 function Api([string]$n, [string]$method, [string]$path, [string]$body = '') {
     $k = (Get-Content (Join-Path $script:Dir 'apikeys.json') | ConvertFrom-Json).$n
-    $a = @('-sk', '-u', $k, '-X', $method, "https://$(Get-OpnIp $n)$path")
+    # the credentials go to curl through a netrc file in the user-only lab folder, not on the command line where every
+    # local user could read them
+    $ip = Get-OpnIp $n
+    $u, $p = $k -split ':', 2
+    $netrc = Join-Path $script:Dir 'netrc'
+    Set-Content $netrc "machine $ip login $u password $p" -Encoding ascii
+    $a = @('-sk', '--netrc-file', $netrc, '-X', $method, "https://$ip$path")
     if ($method -eq 'POST') { if (-not $body) { $body = '_=1' }; $a += @('-d', $body) }
     curl.exe @a
 }

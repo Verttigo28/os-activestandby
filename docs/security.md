@@ -40,4 +40,4 @@
 
 ## Reporting a vulnerability
 
-Please do not open a public issue. Use GitHub's private vulnerability reporting for this repository (Security tab > Report a vulnerability) or e-mail the maintainer listed in `pkg-descr`/`Makefile`. Include the version, steps to reproduce and the impact. Expect an acknowledgement within a few days.
+Please do not open a public issue. Use GitHub's private vulnerability reporting for this repository (Security tab > Report a vulnerability) or e-mail the maintainer listed in the `Makefile`. Include the version, steps to reproduce and the impact. Expect an acknowledgement within a few days.

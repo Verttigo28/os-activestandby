@@ -14,8 +14,8 @@ jobs:
     name: test and cross-build hasyncd
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.27.0' # staticcheck must be built with the same Go that compiles the code
       - name: staticcheck
@@ -34,22 +34,22 @@ jobs:
         working-directory: daemon
         env: { GOOS: freebsd, GOARCH: amd64, CGO_ENABLED: '0' }
         run: |
-          V=dev; case "$GITHUB_REF" in refs/tags/v*) V="${GITHUB_REF_NAME#v}";; esac
+          V=dev
+          case "$GITHUB_REF" in refs/tags/v*) V="${GITHUB_REF_NAME#v}";; esac
+          case "$V" in *[!0-9A-Za-z.+-]*) echo "refusing odd version string"; exit 1;; esac
           go build -trimpath -ldflags "-s -w -X main.version=$V" -o ../src/sbin/hasyncd .
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: src-with-daemon
-          path: |
-            src
-            build
+          name: hasyncd-freebsd
+          path: src/sbin/hasyncd # only the binary travels between jobs; the package job builds from its own checkout
           retention-days: 7
 
   plugin:
     name: lint the GUI and script parts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
         with:
           php-version: '8.3'
       - name: PHP syntax
@@ -82,38 +82,49 @@ jobs:
     name: build and sign the .pkg (tags only)
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [go, plugin]
+    environment: release # restrict this environment (and the signing secret) to protected v* tags in the repository settings
     permissions:
       contents: write      # create the GitHub release, publish the pkg repository branch
       id-token: write      # build provenance attestation
       attestations: write
     runs-on: ubuntu-latest
-    env:
-      PKG_SIGNING_KEY: ${{ secrets.PKG_SIGNING_KEY }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          name: src-with-daemon
-          path: .
+          persist-credentials: false # the token must not end up in the workspace that is synced into the VM
+      - name: version from the tag
+        id: ver
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          case "$V" in *[!0-9A-Za-z.+-]*|"") echo "refusing odd tag name"; exit 1;; esac
+          echo "v=$V" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: hasyncd-freebsd
+          path: src/sbin
+      - name: does the signed repository branch exist already?
+        id: pages
+        run: |
+          if git ls-remote --exit-code --heads "https://github.com/${GITHUB_REPOSITORY}.git" gh-pages >/dev/null 2>&1; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
       - name: signed pkg repository, start from what is already published
-        id: repo
-        if: env.PKG_SIGNING_KEY != ''
-        continue-on-error: true
-        uses: actions/checkout@v7
+        if: steps.pages.outputs.exists == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: gh-pages
           path: dist/repo
-      - name: build the package (and the signed repository) on FreeBSD
-        uses: vmactions/freebsd-vm@v1
+          persist-credentials: false
+      - name: build the package (and sign the repository catalog) on FreeBSD
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
+        env:
+          PKG_SIGNING_KEY: ${{ secrets.PKG_SIGNING_KEY }} # only this step sees the key
         with:
           release: '14.3'
           usesh: true
           envs: 'PKG_SIGNING_KEY'
           run: |
             set -e
-            VERSION="${GITHUB_REF_NAME#v}"
             chmod +x src/sbin/hasyncd
-            sh build/build-pkg.sh "$PWD" "$VERSION" "$PWD/dist"
+            sh build/build-pkg.sh "$PWD" "${{ steps.ver.outputs.v }}" "$PWD/dist"
             if [ -n "$PKG_SIGNING_KEY" ]; then
               mkdir -p dist/repo/All
               cp dist/os-activestandby-*.pkg dist/repo/All/
@@ -121,26 +132,31 @@ jobs:
               printf '%s\n' "$PKG_SIGNING_KEY" > /tmp/repo.key
               pkg repo dist/repo /tmp/repo.key
               rm -f /tmp/repo.key
+              touch dist/repo/.signed
             fi
-      - name: checksums
-        run: cd dist && sha256sum os-activestandby-*.pkg > SHA256SUMS
-      - name: signed provenance for the package (verify with gh attestation verify)
-        if: ${{ !github.event.repository.private }} # GitHub offers attestations for public repositories only (or paid plans)
-        continue-on-error: true
-        uses: actions/attest-build-provenance@v3
+      - name: checksums and key fingerprint
+        id: sums
+        run: |
+          cd dist && sha256sum os-activestandby-*.pkg > SHA256SUMS
+          FP=$(openssl rsa -pubin -in ../keys/activestandby.pub -outform DER 2>/dev/null | openssl dgst -sha256 | sed 's/^.* //')
+          { echo "Package signing key (keys/activestandby.pub) SHA-256 fingerprint:"; echo; echo "    $FP"; } > ../release-note.md
+      - name: signed provenance for the package (public repositories only)
+        if: ${{ !github.event.repository.private }} # GitHub offers attestations for public repositories (or paid plans) only
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: dist/os-activestandby-*.pkg
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           generate_release_notes: true
+          body_path: release-note.md
           files: |
             dist/os-activestandby-*.pkg
             dist/SHA256SUMS
       - name: publish the signed pkg repository (GitHub Pages branch gh-pages)
-        if: env.PKG_SIGNING_KEY != ''
-        uses: peaceiris/actions-gh-pages@v4
+        if: hashFiles('dist/repo/.signed') != ''
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: dist/repo
           keep_files: true
-          exclude_assets: '.git'
+          exclude_assets: '.git,.signed'

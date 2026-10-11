@@ -9,9 +9,12 @@ VER=${2:?version, e.g. 0.3.0}
 OUT=${3:?output dir}
 NAME=os-activestandby
 
+case "$VER" in *[!0-9A-Za-z.+-]*|"") echo "refusing odd version string: $VER" >&2; exit 1;; esac
+
 [ -x "$REPO/src/sbin/hasyncd" ] || { echo "src/sbin/hasyncd missing or not executable: build the daemon first" >&2; exit 1; }
 
 WORK=$(mktemp -d /tmp/pkgbuild.XXXXXX)
+trap 'rm -rf "$WORK"' EXIT INT TERM
 STAGE=$WORK/stage
 META=$WORK/meta
 mkdir -p "$STAGE/usr/local" "$META" "$OUT"

@@ -32,7 +32,7 @@ pkg delete os-activestandby              # break the pair first (the removal scr
 
 ## GitHub
 CI runs on every push and pull request: gofmt, vet and tests with the race detector (Linux and a FreeBSD cross-vet), lint of PHP, XML, JavaScript and shell. Pushing a tag `vX.Y.Z` builds `os-activestandby-X.Y.Z.pkg` on a FreeBSD VM and attaches it, with `SHA256SUMS` and generated release notes, to a GitHub release (the daemon version comes from the tag).
-The package is unsigned: for production, host a signed repository or distribute the .pkg over a channel you trust.
+Releases are checksummed and, once the signing key is configured, also served as a signed pkg repository (see "Signing" below). Verify the key fingerprint out of band before trusting it.
 
 ## Plugins-framework build (optional)
 The `Makefile` follows opnsense/plugins (`net/haproxy` layout) so the plugin can later be submitted there. That build needs the OPNsense tools/ports
@@ -78,3 +78,11 @@ pkg update -r activestandby && pkg install -r activestandby os-activestandby
 (create `/usr/local/etc/pkg/keys` and `/usr/local/etc/pkg/repos` if they do not exist; compare the key's fingerprint with the one in the README before trusting it.)
 
 Rotating the key: generate a new pair, replace the secret and `keys/activestandby.pub`, tell users to replace the public key; the next release re-signs the catalog.
+
+### Protecting the signing key (repository settings)
+
+The release job runs in the GitHub environment `release` and only the FreeBSD build step sees the key. For this to mean something, set up once:
+1. **Settings > Environments > release**: add *required reviewers* (yourself) and restrict *deployment branches and tags* to `v*`; move the secret `PKG_SIGNING_KEY` from the repository secrets into this environment.
+2. **Settings > Rules > Rulesets**: protect tags `v*` (only maintainers may create them; no deletion or force-push), and protect `main` (pull request required).
+3. Keep Actions workflow permissions at read-only by default and enable Dependabot updates (configured) so the SHA-pinned actions stay current.
+All third-party actions are pinned to full commit SHAs; the signing key is passed to the third-party FreeBSD VM action (`vmactions/freebsd-vm`) because `pkg repo` needs FreeBSD. Treat a compromise of that action as a compromise of the key: rotate it as described above.

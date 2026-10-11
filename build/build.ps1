@@ -5,7 +5,7 @@ param([string]$Version = '', [string]$BuildNode = 'peer')
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path "$PSScriptRoot\.."
 $go = 'C:\Program Files\Go\bin\go.exe'
-if (-not $Version) { $Version = (Select-String -Path "$root\daemon\daemon.go" -Pattern 'const version = "([0-9.]+)').Matches[0].Groups[1].Value }
+if (-not $Version) { $Version = (Select-String -Path "$root\daemon\daemon.go" -Pattern 'var version = "([0-9.]+)').Matches[0].Groups[1].Value }
 
 Push-Location "$root\daemon"
 & $go vet ./... ; if ($LASTEXITCODE) { throw 'go vet failed' }
