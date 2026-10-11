@@ -33,6 +33,8 @@ type Config struct {
 	MonitorIfaces  string `json:"monitor_interfaces"`
 	HealthServices bool   `json:"health_services"`
 	HealthHold     int    `json:"health_hold"`
+	PairToken      string `json:"pair_token"`   // secondary kit: pairing token prepared on the primary
+	PairExpires    string `json:"pair_expires"` // ... and its deadline
 }
 
 func (c Config) autoOn() bool { return c.AutoFailover == nil || *c.AutoFailover }
@@ -153,6 +155,8 @@ func runDaemon() error {
 	go d.driftLoop()
 	go d.leaseLoop()
 	go d.jobLoop()
+	go d.kitLoop()
+	d.startKitPairing()
 	go d.mgmtListener()
 	if s := d.store.Get(); s.State == StateStandby && s.ActiveSHA == "" && s.PeerFP != "" && activeValid(st.dir) {
 		d.recordIntegrity()

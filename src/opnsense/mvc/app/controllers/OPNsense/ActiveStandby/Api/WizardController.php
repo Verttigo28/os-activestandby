@@ -35,7 +35,29 @@ class WizardController extends ApiControllerBase
         return ['interfaces' => $out];
     }
 
-    /** @return array{errors: string[], warnings: string[], has_ha_rule: bool} */
+    /** Suggested values for the second firewall's kit. */
+    public function kitdefaultsAction()
+    {
+        $cfg = Config::getInstance()->object();
+        $g = $cfg->OPNsense->ActiveStandby->general ?? null;
+        $out = ['hostname' => (string)$cfg->system->hostname . '-b', 'ha' => '', 'mgmt_static' => false, 'mgmt_key' => ''];
+        if ($g !== null && (string)$g->ha_interface !== '') {
+            $ip = (string)$cfg->interfaces->{(string)$g->ha_interface}->ipaddr;
+            $p = explode('.', $ip);
+            if (count($p) === 4) {
+                $p[3] = (int)$p[3] >= 254 ? (int)$p[3] - 1 : (int)$p[3] + 1;
+                $out['ha'] = implode('.', $p);
+            }
+            $mk = (string)$g->mgmt_interface;
+            if ($mk !== '' && isset($cfg->interfaces->$mk)) {
+                $out['mgmt_key'] = $mk;
+                $out['mgmt_static'] = (string)$cfg->interfaces->$mk->ipaddr !== 'dhcp';
+            }
+        }
+        return $out;
+    }
+
+$1: string[], warnings: string[], has_ha_rule: bool} */
     public function precheckAction()
     {
         $ha = preg_replace('/[^a-z0-9_]/i', '', (string)$this->request->get('ha'));

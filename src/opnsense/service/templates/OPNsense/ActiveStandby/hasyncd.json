@@ -13,5 +13,7 @@
   "preempt_delay": {{ g.preempt_delay|default("300") }},
   "monitor_interfaces": "{{ g.monitor_interfaces|default("") }}",
   "health_services": {{ "true" if g.health_services|default("0") == "1" else "false" }},
-  "health_hold": {{ g.health_hold|default("6") }}
+  "health_hold": {{ g.health_hold|default("6") }},
+  "pair_token": "{{ g.pair_token|default("") }}",
+  "pair_expires": "{{ g.pair_expires|default("") }}"
 }

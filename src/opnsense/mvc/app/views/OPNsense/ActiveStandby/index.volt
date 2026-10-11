@@ -35,6 +35,8 @@
             const paired = s.role === 'master' || s.role === 'standby';
             const standby = paired && s.state === 'standby';
             $('#asLoading').hide();
+            $('#bannerKit').toggle(!!s.kit);
+            if (s.kit) { $('#bannerKitTxt').text('{{ lang._('Waiting for the second firewall at') }} ' + s.kit.peer + (s.kit.error ? ' (' + s.kit.error + ')' : '')); }
             $('#hero').toggle(true);
             $('#standbyUi').toggle(standby);
             $('#fullUi').toggle(!standby);
@@ -87,6 +89,7 @@
         $('#btnTakeoverForce').click(function () {
             stdDialogConfirm('{{ lang._('Force active') }}', '{{ lang._('Take over WITHOUT asking the other firewall. If it is still running, both will fight over the same addresses. Continue?') }}', '{{ lang._('Force') }}', '{{ lang._('Cancel') }}', function () { takeover(true); });
         });
+        $('#bannerKitStop').click(function (e) { e.preventDefault(); ajaxCall('/api/activestandby/pairing/kitcancel', {}, function () { refreshStatus(); }); });
         $('#toggleSbEvents').click(function (e) { e.preventDefault(); $('#sbEvents').toggle(); });
 
         function refreshStatus() {
@@ -206,6 +209,7 @@
         <div class="as-tile"><div class="as-k">{{ lang._('Configuration sync') }}</div><div class="as-v"><span class="as-dot" id="tSyncDot"></span><span id="tSync">-</span></div><div class="as-s" id="tSyncSub"></div></div>
         <div class="as-tile"><div class="as-k">{{ lang._('Failover protection') }}</div><div class="as-v"><span class="as-dot" id="tProtDot"></span><span id="tProt">-</span></div><div class="as-s" id="tProtSub"></div></div>
     </div>
+    <div id="bannerKit" class="alert alert-info" style="display:none"><i class="fa fa-spinner fa-spin"></i> <span id="bannerKitTxt"></span> <a href="#" id="bannerKitStop" style="margin-left:10px">{{ lang._('Stop waiting') }}</a></div>
     <div id="bannerMaint" class="alert alert-info" style="display:none">{{ lang._('MAINTENANCE MODE is on: automatic failover, preemption and health switching are paused on both nodes. Switch it off under Operations when you are done.') }}</div>
     <div id="bannerProblem" class="alert alert-danger" style="display:none"></div>
     <div id="bannerVersion" class="alert alert-warning" style="display:none">{{ lang._('The two nodes run different OPNsense or plugin versions. This is expected while updating one node. Finish updating both; configuration sync is refused across core versions.') }}</div>

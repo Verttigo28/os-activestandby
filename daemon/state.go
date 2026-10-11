@@ -45,6 +45,8 @@ type State struct {
 	ViewSHA   string `json:"view_sha,omitempty"`
 	// Job is the guided upgrade in progress, if any (see upgrade.go). Persisted so it survives reboots and failovers.
 	Job *Job `json:"job,omitempty"`
+	// Kit: a secondary kit was handed out and this (standalone) node pairs with that peer as soon as it answers.
+	Kit *Kit `json:"kit,omitempty"`
 }
 
 type Store struct {

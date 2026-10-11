@@ -65,5 +65,11 @@ By default pairing pins the PRIMARY node's current MAC on every data interface. 
 - Behaviour of the Intel X710 (`ixl`) on admin-down and the real boot window must be confirmed with `lab/hw-probe.sh` before production.
 - Tested with a real IKEv2/PSK site-to-site tunnel to a third OPNsense node (lab/tools/ipsec-lab.ps1): re-established through the new active node 5.9 s after a graceful failover and 6.2 s after a hard power-off of the active node (peer replaces the old IKE SA). dpinger with a monitored WAN gateway also follows the active role (stopped on the standby, restarted on promote). Not yet tested: traffic flowing through the tunnel during failover, peers other than OPNsense/strongSwan.
 
+## Adding the second firewall with the kit
+1. On the primary: Setup wizard, step 1 (HA link), step 2 "Primary", step 3 "Automatic". Enter the second firewall's hostname and HA link address (and management address or `dhcp`), then download the file.
+2. Install OPNsense (same version, same ports) and the plugin on the second machine, cable the HA link, restore the file under System > Configuration > Backups, reboot.
+3. The primary keeps trying to reach the HA address and pairs with the new node by itself (the Status page shows "Waiting for the second firewall"). The file is valid for 48 hours, contains secrets and should be deleted afterwards.
+The kit is the silent standby view of the primary's config: the second firewall does not touch the shared addresses until it is paired.
+
 ## Failover timing (lab, Hyper-V, 4 interfaces + VLAN + LAGG)
-Manual failover: about 3.5 s from the PC's point of view (demote 0.3 s, interface reconfigure 2.5 s, pf + services 0.7 s), measured with a 50 ms ping. Earlier builds took about 6 s. The standby also waits while the peer reports it is promoting (heartbeat 'busy'), so a slow takeover can no longer cause a double promotion.
+Manual failover: about 1.1–1.5 s of lost traffic (a 20 ms ping from the PC), 1.3–1.9 s for the whole call. Earlier builds needed about 6 s. Where the time goes on the new active node: virtual devices 0.33 s, interfaces 0.4–0.6 s, pf reload and services 0.4 s; the DNS/DHCP restart (0.6 s) runs afterwards in the background. Real NICs add link-up time (typically 1–3 s for copper) that the lab cannot show. The standby also waits while the peer reports it is promoting (heartbeat `busy`).

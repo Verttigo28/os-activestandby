@@ -85,6 +85,7 @@ func (d *Daemon) serveCtl() error {
 		}
 		writeJSON(w, 200, map[string]string{"status": "ok", "message": msg})
 	})
+	d.registerKit(mux)
 	d.registerCtl2(mux)
 	return http.Serve(l, mux)
 }
@@ -100,6 +101,9 @@ func (d *Daemon) ctlStatus(w http.ResponseWriter, r *http.Request) {
 		"mgmt_address": d.mgmtAddr(), "peer_mgmt": st.PeerMgmt,
 		"os_version": d.localVer, "maintenance": d.maintenanceOn(), "maintenance_until": st.MaintenanceUntil,
 		"health": d.healthReason(), "drift": d.driftReason(), "fencing": d.cfg.FenceCommand != "", "preempt": d.cfg.Preempt,
+	}
+	if st.Kit != nil {
+		out["kit"] = map[string]string{"peer": st.Kit.Peer, "expires": st.Kit.Expires, "error": st.Kit.Error}
 	}
 	if st.Job != nil {
 		out["job"] = st.Job
@@ -186,6 +190,9 @@ func runCtl(args []string) int {
 	force := fs.Bool("force", false, "")
 	hours := fs.Int("hours", defaultMaintenanceHours, "")
 	failback := fs.Bool("failback", false, "")
+	kha := fs.String("ha", "", "")
+	kmgmt := fs.String("mgmt", "", "")
+	khost := fs.String("hostname", "", "")
 	sub := ""
 	if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
 		sub = args[1]
@@ -213,6 +220,11 @@ func runCtl(args []string) int {
 	case "pair":
 		b, _ := json.Marshal(map[string]string{"peer": *peer, "token": *token})
 		resp, err = cl.Post("http://ctl/pair", "application/json", bytes.NewReader(b))
+	case "kit":
+		b, _ := json.Marshal(map[string]string{"ha": *kha, "mgmt": *kmgmt, "hostname": *khost})
+		resp, err = cl.Post("http://ctl/kit", "application/json", bytes.NewReader(b))
+	case "kit-cancel":
+		resp, err = cl.Post("http://ctl/kit/cancel", "application/json", nil)
 	case "health", "metrics", "history", "preflight":
 		resp, err = cl.Get("http://ctl/" + cmd)
 	case "maintenance": // maintenance on|off [--hours N]

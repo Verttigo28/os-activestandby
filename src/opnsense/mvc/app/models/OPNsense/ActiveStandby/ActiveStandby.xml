@@ -55,6 +55,13 @@
                 <MaximumValue>120</MaximumValue>
                 <Required>Y</Required>
             </health_hold>
+            <pair_token type="TextField">
+                <Required>N</Required>
+                <Mask>/^([A-Za-z2-7]{5}(-[A-Za-z2-7]{5}){3})?$/</Mask>
+            </pair_token>
+            <pair_expires type="TextField">
+                <Required>N</Required>
+            </pair_expires>
             <fence_command type="TextField">
                 <Required>N</Required>
                 <Mask>/^(\/[A-Za-z0-9_.\/-]{1,200})?$/</Mask>

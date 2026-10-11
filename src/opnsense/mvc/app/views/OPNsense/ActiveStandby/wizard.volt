@@ -31,13 +31,37 @@
         </div>
 
         <div class="wz-step" id="wz3p" style="display:none">
-            <h3>3. {{ lang._('Pair with the secondary') }}</h3>
-            <p>{{ lang._('Complete the wizard on the secondary first, it shows an address and a one-time token.') }}</p>
-            <div class="form-group" style="max-width:400px"><label>{{ lang._('Secondary HA link address') }}</label><input class="form-control" id="wzPeer" placeholder="10.99.0.2"/></div>
-            <div class="form-group" style="max-width:400px"><label>{{ lang._('Pairing token') }}</label><input class="form-control" id="wzToken" placeholder="XXXXX-XXXXX-XXXXX-XXXXX"/></div>
-            <button class="btn btn-default wzBackRole">{{ lang._('Back') }}</button>
-            <button class="btn btn-primary" id="wzPair">{{ lang._('Pair') }}</button>
-            <div id="wzPairRes" class="alert" style="display:none; margin-top:10px"></div>
+            <h3>3. {{ lang._('Add the second firewall') }}</h3>
+            <div class="well" style="max-width:820px">
+                <h4>{{ lang._('Automatic (recommended)') }}</h4>
+                <p>{{ lang._('Download a ready-made configuration file for the second firewall. It carries the second firewall\'s own name and addresses, the same interface settings and a one-time pairing key. Pairing then happens by itself.') }}</p>
+                <div class="row">
+                    <div class="col-sm-4"><div class="form-group"><label>{{ lang._('Hostname of the second firewall') }}</label><input class="form-control" id="kitHost"/></div></div>
+                    <div class="col-sm-4"><div class="form-group"><label>{{ lang._('Its HA link address') }}</label><input class="form-control" id="kitHa" placeholder="10.99.0.2"/></div></div>
+                    <div class="col-sm-4" id="kitMgmtBox" style="display:none"><div class="form-group"><label>{{ lang._('Its management address (IPv4 or dhcp)') }}</label><input class="form-control" id="kitMgmt" placeholder="dhcp"/></div></div>
+                </div>
+                <button class="btn btn-primary" id="kitDownload"><i class="fa fa-download"></i> {{ lang._('Download configuration for the second firewall') }}</button>
+                <div id="kitRes" class="alert" style="display:none; margin-top:12px"></div>
+                <div id="kitSteps" style="display:none; margin-top:12px">
+                    <ol style="line-height:1.8">
+                        <li>{{ lang._('Install OPNsense on the second machine (same version and hardware, same network ports).') }}</li>
+                        <li>{{ lang._('Install the os-activestandby plugin on it.') }}</li>
+                        <li>{{ lang._('Cable the HA link, then restore the downloaded file: System > Configuration > Backups > Restore.') }}</li>
+                        <li>{{ lang._('Reboot it. This page notices when it comes up and pairs with it automatically.') }}</li>
+                    </ol>
+                    <div id="kitWait" class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> <span id="kitWaitTxt"></span></div>
+                    <button class="btn btn-default btn-sm" id="kitCancel">{{ lang._('Stop waiting') }}</button>
+                </div>
+            </div>
+            <p><a href="#" id="wzManualToggle">{{ lang._('Pair manually with a token instead') }}</a></p>
+            <div id="wzManual" style="display:none">
+                <p>{{ lang._('Complete the wizard on the secondary first, it shows an address and a one-time token.') }}</p>
+                <div class="form-group" style="max-width:400px"><label>{{ lang._('Secondary HA link address') }}</label><input class="form-control" id="wzPeer" placeholder="10.99.0.2"/></div>
+                <div class="form-group" style="max-width:400px"><label>{{ lang._('Pairing token') }}</label><input class="form-control" id="wzToken" placeholder="XXXXX-XXXXX-XXXXX-XXXXX"/></div>
+                <button class="btn btn-primary" id="wzPair">{{ lang._('Pair') }}</button>
+                <div id="wzPairRes" class="alert" style="display:none; margin-top:10px"></div>
+            </div>
+            <button class="btn btn-default wzBackRole" style="margin-top:10px">{{ lang._('Back') }}</button>
         </div>
 
         <div class="wz-step" id="wz3s" style="display:none">
@@ -123,6 +147,39 @@ $(function () {
         $('#wzDone').text(msg);
         step('wz4');
     }
+
+    $('#wzManualToggle').click(function (e) { e.preventDefault(); $('#wzManual').toggle(); });
+    ajaxGet('/api/activestandby/wizard/kitdefaults', {}, function (r) {
+        $('#kitHost').val(r.hostname || '');
+        $('#kitHa').val(r.ha || '');
+        if (r.mgmt_key) { $('#kitMgmtBox').show(); $('#kitMgmt').attr('placeholder', r.mgmt_static ? '192.168.x.y' : 'dhcp').val(r.mgmt_static ? '' : 'dhcp'); }
+    });
+    let pollKit = null;
+    function watchKit() {
+        $('#kitSteps').show();
+        clearInterval(pollKit);
+        pollKit = setInterval(function () {
+            ajaxGet('/api/activestandby/pairing/status', {}, function (s) {
+                if (s.role === 'master') { clearInterval(pollKit); paired('{{ lang._('The second firewall came up and was paired. It is now the standby and receives the complete configuration.') }}'); return; }
+                if (!s.kit) { clearInterval(pollKit); $('#kitWait').attr('class', 'alert alert-warning').text('{{ lang._('Stopped waiting for the second firewall.') }}'); return; }
+                $('#kitWaitTxt').text('{{ lang._('Waiting for the second firewall at') }} ' + s.kit.peer + (s.kit.error ? ' (' + s.kit.error + ')' : ''));
+            });
+        }, 3000);
+    }
+    $('#kitDownload').click(function () {
+        alertBox('#kitRes', 'alert-info', '{{ lang._('Building...') }}');
+        ajaxCall('/api/activestandby/pairing/kit', {ha: $('#kitHa').val(), mgmt: $('#kitMgmt').val(), hostname: $('#kitHost').val()}, function (r) {
+            if (r.error || !r.xml) { alertBox('#kitRes', 'alert-danger', esc(r.error || 'no data')); return; }
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([r.xml], {type: 'text/xml'}));
+            a.download = r.filename;
+            document.body.appendChild(a); a.click(); a.remove();
+            alertBox('#kitRes', 'alert-success', '{{ lang._('Downloaded') }} <b>' + esc(r.filename) + '</b>. {{ lang._('It contains secrets (users, keys, the pairing key): keep it safe and delete it afterwards. It is valid for 48 hours.') }}');
+            watchKit();
+        });
+    });
+    $('#kitCancel').click(function () { ajaxCall('/api/activestandby/pairing/kitcancel', {}, function () {}); });
+    ajaxGet('/api/activestandby/pairing/status', {}, function (s) { if (s.kit) { watchKit(); } });
 
     $('#wzPair').click(function () {
         alertBox('#wzPairRes', 'alert-info', '{{ lang._('Pairing...') }}');

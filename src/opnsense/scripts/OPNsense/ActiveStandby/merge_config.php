@@ -79,6 +79,13 @@ foreach ($paths as $p) {
     $parent->appendChild($imp);
 }
 
+// the one-time pairing key from a secondary kit is spent once the node is paired: do not keep it
+foreach (['pair_token', 'pair_expires'] as $t) {
+    foreach ($mx->query("/opnsense/OPNsense/ActiveStandby/general/$t") as $n) {
+        $n->parentNode->removeChild($n);
+    }
+}
+
 $m->formatOutput = true;
 if ($m->save($argv[3]) === false) {
     fail('cannot write output');

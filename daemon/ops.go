@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -237,18 +238,39 @@ func (d *Daemon) promote(reason string) error {
 	step(t0, "virtual devices created")
 	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 	var firstErr error
-	// one php process for all interfaces (the stock action starts one per interface); the stock action is the fallback
-	keys := []string{}
+	// each interface costs ~0.6 s of mostly waiting; independent ones are configured at the same time, each in its own
+	// php process. Devices that sit on top of others (VLAN, LAGG, ...) follow once their parents are up.
+	var phys, virt []Iface
 	for _, i := range set.Data {
-		keys = append(keys, i.Key)
-	}
-	if out, err := sh(reconfScript, keys...); err != nil {
-		log.Printf("promote: fast interface reconfigure failed (%v: %s), using the stock action", err, out)
-		for _, k := range keys {
-			if out, err := sh("configctl", "interface", "reconfigure", k); err != nil && firstErr == nil {
-				firstErr = fmt.Errorf("reconfigure %s: %v: %s", k, err, out)
-			}
+		if virtualDev.MatchString(i.Dev) {
+			virt = append(virt, i)
+		} else {
+			phys = append(phys, i)
 		}
+	}
+	for _, group := range [][]Iface{phys, virt} {
+		var rw sync.WaitGroup
+		var emu sync.Mutex
+		for _, i := range group {
+			rw.Add(1)
+			go func(key string) {
+				defer rw.Done()
+				if out, err := sh(reconfScript, "iface", key); err != nil {
+					log.Printf("promote: fast reconfigure of %s failed (%v: %s), using the stock action", key, err, out)
+					if out, err := sh("configctl", "interface", "reconfigure", key); err != nil {
+						emu.Lock()
+						if firstErr == nil {
+							firstErr = fmt.Errorf("reconfigure %s: %v: %s", key, err, out)
+						}
+						emu.Unlock()
+					}
+				}
+			}(i.Key)
+		}
+		rw.Wait()
+	}
+	if out, err := sh(reconfScript, "routes"); err != nil {
+		log.Printf("promote: routes: %v: %s", err, out)
 	}
 	step(t0, "interfaces reconfigured")
 	if firstErr != nil {
@@ -271,35 +293,34 @@ func (d *Daemon) promote(reason string) error {
 			return fmt.Errorf("interface %s (%s) did not come up after reconfigure; is it enabled in the config?", i.Key, i.Dev)
 		}
 	}
-	sh("configctl", "filter", "reload")
-	step(t0, "pf reloaded")
-	// gratuitous ARP right after the link is up so the switch and neighbours relearn the port
+	// gratuitous ARP first, right after the links are up so the switch and neighbours relearn the port
 	for _, i := range set.Data {
 		announce(i.Dev)
 	}
 	step(t0, "gratuitous ARP sent")
+	// pf and the services do not depend on each other: run them side by side
 	var wg sync.WaitGroup
-	cmds := append([][]string{}, haStart...)
-	// DHCP servers must re-read the lease files replicated from the old active node (only when they are enabled)
-	if svc, _ := sh("pluginctl", "-S"); svc != "" {
-		if strings.Contains(svc, `"name": "dnsmasq"`) {
-			cmds = append(cmds, []string{"configctl", "dnsmasq", "restart"})
-		}
-		if strings.Contains(svc, `"name": "kea`) {
-			cmds = append(cmds, []string{"configctl", "kea", "restart"})
-		}
-	}
-	for _, c := range cmds {
+	run := func(c ...string) {
 		wg.Add(1)
-		go func(c []string) {
+		go func() {
 			defer wg.Done()
 			t1 := time.Now()
 			out, err := sh(c[0], c[1:]...)
-			log.Printf("  start %v: %dms err=%v out=%q", c, time.Since(t1).Milliseconds(), err, out)
-		}(c)
+			log.Printf("  %v: %dms err=%v out=%q", c, time.Since(t1).Milliseconds(), err, out)
+		}()
 	}
+	run("configctl", "filter", "reload")
+	for _, c := range haStart {
+		run(c...)
+	}
+	// DHCP and DNS services restart once (not once per interface) and re-read the lease files replicated from the old active node
 	wg.Wait()
-	step(t0, "services started")
+	go func() { // nothing waits for these: traffic already flows
+		t1 := time.Now()
+		out, err := sh(reconfScript, "dns")
+		log.Printf("  dhcp+dns restart: %dms err=%v out=%q", time.Since(t1).Milliseconds(), err, out)
+	}()
+	step(t0, "pf reloaded, services started")
 	d.event("change", "promoted to ACTIVE (%s) in %d ms", reason, time.Since(t0).Milliseconds())
 	err = d.store.Update(func(s *State) {
 		_, _, pe := d.hb.Snapshot()
@@ -488,3 +509,5 @@ func bootGuard() error {
 	}
 	return nil
 }
+
+var virtualDev = regexp.MustCompile(`^(vlan|lagg|bridge|gre|gif|epair|vxlan|qinq|tap|tun|ovpn|wg)[0-9]`)

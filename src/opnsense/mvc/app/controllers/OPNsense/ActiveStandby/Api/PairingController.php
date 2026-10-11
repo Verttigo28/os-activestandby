@@ -101,6 +101,32 @@ class PairingController extends ApiControllerBase
         return $this->ctl('ctl_pair', [$peer, $token]);
     }
 
+    /** Primary: build the configuration file for the second firewall (restore it there, pairing is automatic). */
+    public function kitAction()
+    {
+        if (!$this->request->isPost()) {
+            return ['error' => 'POST required'];
+        }
+        $ha = trim((string)$this->request->getPost('ha'));
+        $mgmt = trim((string)$this->request->getPost('mgmt'));
+        $host = trim((string)$this->request->getPost('hostname'));
+        if (filter_var($ha, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
+            return ['error' => gettext('Enter the HA link IPv4 address of the second firewall.')];
+        }
+        if ($mgmt !== '' && $mgmt !== 'dhcp' && filter_var($mgmt, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
+            return ['error' => gettext('The management address must be an IPv4 address or dhcp.')];
+        }
+        if (!preg_match('/^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/', $host)) {
+            return ['error' => gettext('Invalid hostname.')];
+        }
+        return $this->ctl('ctl_kit', [$ha, $mgmt === '' ? '-' : $mgmt, $host]);
+    }
+
+    public function kitcancelAction()
+    {
+        return $this->request->isPost() ? $this->ctl('ctl_kit_cancel') : ['error' => 'POST required'];
+    }
+
     /** Graceful switchover; works from either node. */
     public function failoverAction()
     {
