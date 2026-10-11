@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -139,6 +140,12 @@ func (d *Daemon) kitLoop() {
 			d.event("warning", "the secondary kit expired before the second firewall came up")
 			d.store.Update(func(s *State) { s.Kit = nil })
 			continue
+		}
+		// cheap reachability check first: pairing gathers node info, which is expensive to do every few seconds for hours
+		if c, derr := net.DialTimeout("tcp", net.JoinHostPort(st.Kit.Peer, fmt.Sprint(d.cfg.ListenPort)), 1500*time.Millisecond); derr != nil {
+			continue
+		} else {
+			c.Close()
 		}
 		_, diffs, err := d.doPair(st.Kit.Peer, d.cfg.ListenPort, st.Kit.Token)
 		if err != nil {

@@ -36,7 +36,8 @@ type Job struct {
 }
 
 func (j *Job) terminal() bool {
-	return j == nil || j.Phase == "done" || j.Phase == "failed" || j.Phase == "cancelled"
+	// r2-handed-over: the job moved to the other node, which finishes it; here it is over
+	return j == nil || j.Phase == "done" || j.Phase == "failed" || j.Phase == "cancelled" || j.Phase == "r2-handed-over"
 }
 
 func (d *Daemon) jobLog(msg string) {
@@ -80,6 +81,12 @@ func (d *Daemon) startUpgrade(failback bool) error {
 	if !st.Job.terminal() {
 		return errors.New("an upgrade is already running")
 	}
+	if u := loadUpdateInfo(); !u.Available {
+		if !u.Checked {
+			return errors.New("update status unknown: run \"Check for updates\" first")
+		}
+		return errors.New("no updates available (last check " + u.LastCheck + "): nothing to do")
+	}
 	pf := d.preflight()
 	if pf["summary"] == "fail" {
 		return errors.New("pre-flight reported failures: fix them first (see Pre-flight)")
@@ -121,6 +128,10 @@ func (d *Daemon) jobStep() {
 	case "r1-update", "r2-update":
 		if j.Sub == "" {
 			if !alive || peer.State != StateStandby {
+				// right after a failover the old active node may still be finishing its demote: give it a minute
+				if time.Since(parseTime(j.Updated)) < time.Minute {
+					return
+				}
 				d.jobFail("the standby is not reachable or not standby")
 				return
 			}

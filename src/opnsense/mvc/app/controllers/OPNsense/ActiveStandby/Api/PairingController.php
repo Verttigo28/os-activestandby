@@ -80,6 +80,18 @@ class PairingController extends ApiControllerBase
         return $this->ctl('ctl_upgrade_status');
     }
 
+    /** Result of the last OPNsense update check (is there anything to update?). */
+    public function updatesAction()
+    {
+        return $this->ctl('ctl_updates');
+    }
+
+    /** Ask OPNsense to check for updates now; the result appears in updatesAction after a few seconds. */
+    public function updatescheckAction()
+    {
+        return $this->request->isPost() ? $this->ctl('ctl_updates_check') : ['error' => 'POST required'];
+    }
+
     public function infoAction()
     {
         return $this->ctl('ctl_info');

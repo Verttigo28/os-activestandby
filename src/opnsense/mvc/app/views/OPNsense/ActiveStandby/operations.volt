@@ -22,6 +22,11 @@
         <hr/>
         <h2>{{ lang._('Upgrade assistant') }}</h2>
         <p>{{ lang._('Updates both nodes one after the other without an outage: the standby is updated and rebooted first, then the roles are switched and the other node is updated. Do not change the configuration while it runs. Maintenance mode is switched on for the duration and the job stops (leaving maintenance mode on) if anything goes wrong.') }}</p>
+        <p>
+            <span id="opUpdInfo" class="label label-default">-</span>
+            <button class="btn btn-default btn-sm" id="opUpdCheck" style="margin-left:8px"><i class="fa fa-refresh"></i> {{ lang._('Check for updates') }}</button>
+            <span id="opUpdList" class="text-muted" style="margin-left:8px"></span>
+        </p>
         <div class="checkbox"><label><input type="checkbox" id="opFailback"/> {{ lang._('Give the active role back to the original node at the end') }}</label></div>
         <button class="btn btn-danger" id="opUpStart">{{ lang._('Start guided upgrade') }}</button>
         <button class="btn btn-default" id="opUpCancel" style="display:none">{{ lang._('Cancel') }}</button>
@@ -91,14 +96,32 @@ $(function () {
         });
     }
 
+    let updAvailable = false, jobRunning = false;
+    function applyUpStart() { $('#opUpStart').prop('disabled', jobRunning || !updAvailable).attr('title', updAvailable ? '' : '{{ lang._('Nothing to update: run a check, the guided upgrade is only offered when updates are available') }}'); }
+    function refreshUpdates() {
+        ajaxGet('/api/activestandby/pairing/updates', {}, function (u) {
+            updAvailable = !!u.available;
+            if (!u.checked) { $('#opUpdInfo').attr('class', 'label label-default').text('{{ lang._('not checked yet') }}'); }
+            else if (u.available) { $('#opUpdInfo').attr('class', 'label label-warning').text(u.count + ' {{ lang._('update(s) available') }}' + (u.major_version ? ' (' + u.major_version + ')' : '')); }
+            else { $('#opUpdInfo').attr('class', 'label label-success').text('{{ lang._('up to date') }}'); }
+            $('#opUpdList').text((u.packages || []).join(', ') + (u.last_check ? '  ·  {{ lang._('checked') }} ' + u.last_check : ''));
+            applyUpStart();
+        });
+    }
+    $('#opUpdCheck').click(function () {
+        $('#opUpdInfo').attr('class', 'label label-info').text('{{ lang._('checking...') }}');
+        ajaxCall('/api/activestandby/pairing/updatescheck', {}, function () { setTimeout(refreshUpdates, 12000); setTimeout(refreshUpdates, 30000); });
+    });
+    refreshUpdates();
+
     function refreshJob() {
         ajaxGet('/api/activestandby/pairing/upgradestatus', {}, function (r) {
             const j = r.job;
             if (!j) { $('#opUpJob, #opUpCancel').hide(); return; }
-            const running = ['done', 'failed', 'cancelled'].indexOf(j.phase) < 0;
+            const running = ['done', 'failed', 'cancelled', 'r2-handed-over'].indexOf(j.phase) < 0;
             $('#opUpJob').show();
             $('#opUpCancel').toggle(running);
-            $('#opUpStart').prop('disabled', running);
+            jobRunning = running; applyUpStart();
             const cur = j.phase === 'r2-handed-over' ? 'r2-update' : j.phase;
             let idx = PHASES.findIndex(p => p[0] === cur);
             if (cur === 'done') { idx = PHASES.length; }

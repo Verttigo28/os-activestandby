@@ -86,6 +86,7 @@ func (d *Daemon) serveCtl() error {
 		writeJSON(w, 200, map[string]string{"status": "ok", "message": msg})
 	})
 	d.registerKit(mux)
+	d.registerUpdates(mux)
 	d.registerCtl2(mux)
 	return http.Serve(l, mux)
 }
@@ -224,6 +225,10 @@ func runCtl(args []string) int {
 		resp, err = cl.Post("http://ctl/kit", "application/json", bytes.NewReader(b))
 	case "audit":
 		resp, err = cl.Post("http://ctl/audit?msg="+url.QueryEscape(*amsg), "application/json", nil)
+	case "updates":
+		resp, err = cl.Get("http://ctl/updates")
+	case "updates-check":
+		resp, err = cl.Post("http://ctl/updates/check", "application/json", nil)
 	case "kit-cancel":
 		resp, err = cl.Post("http://ctl/kit/cancel", "application/json", nil)
 	case "health", "metrics", "history", "preflight":
