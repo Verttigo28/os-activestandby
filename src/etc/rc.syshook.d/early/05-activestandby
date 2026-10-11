@@ -1,0 +1,10 @@
+#!/bin/sh
+
+# A paired node always boots into standby view (data interfaces disabled) BEFORE interfaces are
+# configured, so a rebooting node can never come up with the active node's IP and MAC.
+# The guard then keeps VLAN/LAGG devices and member NICs (raised by OPNsense itself) down until the daemon runs.
+if [ -x /usr/local/sbin/hasyncd ]; then
+    /usr/local/sbin/hasyncd boot-standby
+    /usr/sbin/daemon -f -p /var/run/hasyncd-guard.pid /usr/local/sbin/hasyncd boot-guard
+fi
+exit 0

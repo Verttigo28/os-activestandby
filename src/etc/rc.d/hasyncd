@@ -1,0 +1,19 @@
+#!/bin/sh
+
+# PROVIDE: hasyncd
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name=hasyncd
+rcvar=hasyncd_enable
+load_rc_config $name
+
+: ${hasyncd_enable:=NO}
+
+pidfile=/var/run/hasyncd.pid
+command=/usr/sbin/daemon
+command_args="-r -f -P ${pidfile} -o /var/log/hasyncd.log /usr/local/sbin/hasyncd daemon"
+
+run_rc_command "$1"

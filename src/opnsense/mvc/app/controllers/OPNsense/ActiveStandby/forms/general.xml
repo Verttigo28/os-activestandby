@@ -1,0 +1,47 @@
+<form>
+    <field>
+        <id>activestandby.general.enabled</id>
+        <label>Enable</label>
+        <type>checkbox</type>
+        <help>Run the HA daemon on this node.</help>
+    </field>
+    <field>
+        <id>activestandby.general.ha_interface</id>
+        <label>HA link interface</label>
+        <type>dropdown</type>
+        <help>Dedicated point-to-point interface to the peer. It needs a different static IP on each node and is never put in standby.</help>
+    </field>
+    <field>
+        <id>activestandby.general.mgmt_interface</id>
+        <label>Management interface (optional)</label>
+        <type>dropdown</type>
+        <help>Stays up on the standby and is used as a secondary heartbeat path. It is also excluded from MAC sharing and config sync.</help>
+    </field>
+    <field>
+        <id>activestandby.general.auto_failover</id>
+        <label>Automatic failover</label>
+        <type>checkbox</type>
+        <help>The standby promotes itself when the active node is lost on all heartbeat paths, and a rebooted node waits in standby. Disable to fail over manually only.</help>
+    </field>
+    <field>
+        <id>activestandby.general.allow_ha_only_promote</id>
+        <label>Promote on HA-link-only silence</label>
+        <type>checkbox</type>
+        <advanced>true</advanced>
+        <help>Without a management heartbeat path, promote even if this node cannot prove its own HA link is healthy. Risk: both nodes active if only the cable is cut.</help>
+    </field>
+    <field>
+        <id>activestandby.general.force_promisc</id>
+        <label>Promiscuous mode on data interfaces</label>
+        <type>checkbox</type>
+        <advanced>true</advanced>
+        <help>Needed on virtual NICs (Hyper-V, some virtio setups) whose driver does not reprogram its receive filter when the shared MAC is applied. Real NICs (Intel ixl, igb, ...) do not need it.</help>
+    </field>
+    <field>
+        <id>activestandby.general.listen_port</id>
+        <label>Peer port</label>
+        <type>text</type>
+        <advanced>true</advanced>
+        <help>TCP port of the peer link (mutual TLS), bound to the HA link address only. Must be the same on both nodes.</help>
+    </field>
+</form>

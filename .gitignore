@@ -1,0 +1,12 @@
+src/sbin/hasyncd
+lab/*.iso
+lab/*.bz2
+lab/vms/
+lab/tools/*.png
+daemon/*.exe
+
+lab/.lab-password
+dist/
+lab/tools/*.out
+*.pkg
+.idea/

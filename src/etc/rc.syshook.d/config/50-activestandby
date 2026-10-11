@@ -1,0 +1,5 @@
+#!/bin/sh
+
+# A configuration change was saved: wake the sync engine now instead of waiting for its next 1 s poll.
+[ -x /usr/local/sbin/hasyncd ] && /usr/local/sbin/hasyncd ctl sync-now >/dev/null 2>&1
+exit 0

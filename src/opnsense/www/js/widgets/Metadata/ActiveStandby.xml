@@ -1,0 +1,30 @@
+<metadata>
+    <activestandby>
+        <filename>ActiveStandby.js</filename>
+        <link>/ui/activestandby</link>
+        <endpoints>
+            <endpoint>/api/activestandby/pairing/status</endpoint>
+            <endpoint>/api/activestandby/pairing/events</endpoint>
+        </endpoints>
+        <translations>
+            <title>Active/Standby HA</title>
+            <unconfigured>Active/Standby HA is not paired. Click to open the setup wizard.</unconfigured>
+            <thisnode>This node</thisnode>
+            <peer>Peer</peer>
+            <links>Heartbeat links</links>
+            <sync>Config sync</sync>
+            <lastevent>Last event</lastevent>
+            <active>ACTIVE</active>
+            <standby>STANDBY</standby>
+            <reachable>reachable</reachable>
+            <unreachable>NOT reachable</unreachable>
+            <insync>in sync</insync>
+            <behind>revision(s) behind</behind>
+            <failed>FAILED</failed>
+            <ha>HA link</ha>
+            <mgmt>management</mgmt>
+            <held>Automatic failover is held back</held>
+            <versions>Versions differ</versions>
+        </translations>
+    </activestandby>
+</metadata>

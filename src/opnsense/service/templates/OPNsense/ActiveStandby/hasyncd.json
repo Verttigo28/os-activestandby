@@ -1,0 +1,9 @@
+{% set g = OPNsense.ActiveStandby.general if helpers.exists('OPNsense.ActiveStandby.general') else {} %}
+{
+  "listen_port": {{ g.listen_port|default("7690") }},
+  "ha_device": "{% if g.ha_interface|default("") %}{{ helpers.physical_interface(g.ha_interface) }}{% endif %}",
+  "mgmt_device": "{% if g.mgmt_interface|default("") %}{{ helpers.physical_interface(g.mgmt_interface) }}{% endif %}",
+  "auto_failover": {{ "true" if g.auto_failover|default("1") == "1" else "false" }},
+  "allow_ha_only_promote": {{ "true" if g.allow_ha_only_promote|default("0") == "1" else "false" }},
+  "force_promisc": {{ "true" if g.force_promisc|default("0") == "1" else "false" }}
+}

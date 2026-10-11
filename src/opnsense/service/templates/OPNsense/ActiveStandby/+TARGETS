@@ -1,0 +1,2 @@
+rc.conf.d:/etc/rc.conf.d/hasyncd
+hasyncd.json:/usr/local/etc/hasyncd.json

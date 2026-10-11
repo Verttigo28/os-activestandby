@@ -1,0 +1,8 @@
+<menu>
+    <System>
+        <ActiveStandby VisibleName="Active/Standby HA" cssClass="fa fa-exchange fa-fw" order="45">
+            <Status VisibleName="Status and Pairing" url="/ui/activestandby" order="10"/>
+            <Settings VisibleName="Settings" url="/ui/activestandby#settings" order="20"/>
+        </ActiveStandby>
+    </System>
+</menu>

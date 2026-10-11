@@ -1,0 +1,41 @@
+<model>
+    <mount>//OPNsense/ActiveStandby</mount>
+    <version>1.0.0</version>
+    <description>Active/standby HA settings (node-local; excluded from config sync)</description>
+    <items>
+        <general>
+            <enabled type="BooleanField">
+                <Default>0</Default>
+                <Required>Y</Required>
+            </enabled>
+            <ha_interface type="InterfaceField">
+                <Required>N</Required>
+                <multiple>N</multiple>
+                <AllowDynamic>N</AllowDynamic>
+            </ha_interface>
+            <mgmt_interface type="InterfaceField">
+                <Required>N</Required>
+                <multiple>N</multiple>
+                <AllowDynamic>N</AllowDynamic>
+            </mgmt_interface>
+            <auto_failover type="BooleanField">
+                <Default>1</Default>
+                <Required>Y</Required>
+            </auto_failover>
+            <allow_ha_only_promote type="BooleanField">
+                <Default>0</Default>
+                <Required>Y</Required>
+            </allow_ha_only_promote>
+            <force_promisc type="BooleanField">
+                <Default>0</Default>
+                <Required>Y</Required>
+            </force_promisc>
+            <listen_port type="IntegerField">
+                <Default>7690</Default>
+                <MinimumValue>1024</MinimumValue>
+                <MaximumValue>65535</MaximumValue>
+                <Required>Y</Required>
+            </listen_port>
+        </general>
+    </items>
+</model>

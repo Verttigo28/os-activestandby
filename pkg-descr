@@ -1,0 +1,3 @@
+Active/standby high availability for OPNsense in the style of SonicWall HA:
+one IP per interface, identical IP and MAC on both nodes, standby keeps all
+data interfaces administratively down, full configuration replication.
