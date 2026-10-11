@@ -2,6 +2,9 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 0.5.5
+- The pkg repository is signed (key fingerprint in the README); releases are published together with a signed build attestation.
+
 ## 0.5.4
 - **Shared settings**: the plugin settings (timing, health, probes, fencing, notifications, preemption, virtual MAC, session sync) are now replicated from the active node. Only whether the service is enabled, the HA and management interface choice and the peer port stay per node. The standby applies a change by itself (renders its daemon configuration and restarts the daemon once, about a second) and no longer needs unlocking to be configured.
 

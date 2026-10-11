@@ -58,7 +58,7 @@ One-time setup by the maintainer:
 1. On Windows run `.\build\gen-signing-key.ps1` in PowerShell (it uses the openssl that ships with Git for Windows); elsewhere `sh build/gen-signing-key.sh`. Either creates `repo.key` (private) and `keys/activestandby.pub` (public) and prints the key fingerprint. On Windows, `Get-Content repo.key -Raw | Set-Clipboard` copies the private key for the secret. Commit `keys/activestandby.pub`, never `repo.key`.
 2. GitHub, repository **Settings > Secrets and variables > Actions > New repository secret**: name `PKG_SIGNING_KEY`, value the complete content of `repo.key` including the `-----BEGIN` and `-----END` lines. Store `repo.key` in a password manager or delete it from the workstation.
 3. GitHub, **Settings > Pages**: source *Deploy from a branch*, branch `gh-pages`, folder `/ (root)`. The branch appears after the first tagged build with the secret set.
-4. Publish the key fingerprint in the README so users can compare it.
+4. Publish the key fingerprint in the README so users can compare it (done: README, section Package signing).
 
 Without the secret the release still works (steps 1 above only); the repository steps are skipped.
 

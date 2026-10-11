@@ -62,6 +62,16 @@ Details: [getting started](docs/getting-started.md), [operations](docs/operation
 | [Roadmap](docs/roadmap.md) | what is open |
 | [Changelog](CHANGELOG.md) | release history |
 
+## Package signing
+
+Releases carry a signed build attestation and SHA-256 checksums. The pkg repository on GitHub Pages is signed with this key (RSA 4096, public key in [keys/activestandby.pub](keys/activestandby.pub)); compare its SHA-256 fingerprint before trusting it:
+
+```
+be5ef3e668d8079010f598b062f71dab064c183433faf98b7a30a6d03b6da411
+```
+
+Setup: [docs/building.md](docs/building.md#signing).
+
 ## Requirements and limits
 
 - OPNsense 26.7 or newer (FreeBSD 15), two machines with identical NIC names, same OPNsense and plugin versions. Pairing refuses anything else.

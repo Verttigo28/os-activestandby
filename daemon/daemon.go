@@ -16,7 +16,7 @@ import (
 )
 
 // version is set at build time (-ldflags "-X main.version=...") by CI and build/build.ps1.
-var version = "0.5.4"
+var version = "0.5.5"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`

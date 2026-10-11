@@ -11,7 +11,6 @@ Open items, most valuable first. Done items live in the [changelog](../CHANGELOG
 ## Strongly recommended
 
 4. **Role-based permissions** beyond view/full: separate "failover" and "break pair" privileges.
-5. **Publish the signing key fingerprint** and turn the signed pkg repository on (needs the `PKG_SIGNING_KEY` secret, see building).
 6. **Captive-portal and roaming-VPN session sync.**
 
 ## Nice to have
