@@ -51,11 +51,18 @@ jobs:
         run: find src -name '*.php' -print0 | xargs -0 -n1 php -l > /dev/null
       - name: XML well-formedness (model, ACL, menu, forms, widget metadata)
         run: |
-          sudo apt-get -qq install -y libxml2-utils
-          find src -name '*.xml' -print0 | xargs -0 xmllint --noout
+          python3 - <<PY
+          import glob, sys, xml.dom.minidom
+          bad = 0
+          for f in glob.glob("src/**/*.xml", recursive=True):
+              try:
+                  xml.dom.minidom.parse(f)
+              except Exception as e:
+                  print(f, e); bad = 1
+          sys.exit(bad)
+          PY
       - name: shell scripts
         run: |
-          sudo apt-get -qq install -y shellcheck
           shellcheck -S warning src/opnsense/scripts/OPNsense/ActiveStandby/*.sh src/etc/rc.d/hasyncd build/build-pkg.sh || true
       - name: JavaScript syntax (widget and views)
         run: |
