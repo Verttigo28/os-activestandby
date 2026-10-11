@@ -14,24 +14,24 @@ lab/                           Hyper-V lab tooling and notes (not part of the pa
 ## Build the package
 Anywhere with Go >= 1.22 and a FreeBSD/OPNsense host to run `pkg create` (any OPNsense node works, e.g. a spare VM):
 ```powershell
-.\build\build.ps1 -Version 0.3.0 -BuildNode peer      # lab shortcut; produces dist\os-activestandby-0.3.0.pkg
+.\build\build.ps1 -Version 0.5.0 -BuildNode peer      # lab shortcut; produces dist\os-activestandby-<version>.pkg
 ```
 By hand:
 ```sh
 cd daemon && go test ./... && GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o ../src/sbin/hasyncd .
 # copy the repo to a FreeBSD/OPNsense host, then:
-sh build/build-pkg.sh /path/to/repo 0.3.0 /path/to/out
+sh build/build-pkg.sh /path/to/repo 0.5.0 /path/to/out
 ```
 The package has no dependencies, ABI `FreeBSD:*:amd64`, and its install/removal scripts refresh the GUI caches and restart configd.
 
 ## Install / remove (both nodes, identical OPNsense and plugin versions)
 ```sh
-pkg add os-activestandby-0.3.0.pkg       # then System > Active/Standby HA > Setup wizard
+pkg add os-activestandby-<version>.pkg       # then System > Active/Standby HA > Setup wizard
 pkg delete os-activestandby              # break the pair first (the removal script warns if the node is still paired)
 ```
 
 ## GitHub
-CI runs on every push and pull request; pushing a tag `vX.Y.Z` builds `os-activestandby-X.Y.Z.pkg` on a FreeBSD VM and attaches it to a GitHub release.
+CI runs on every push and pull request: gofmt, vet and tests with the race detector (Linux and a FreeBSD cross-vet), lint of PHP, XML, JavaScript and shell. Pushing a tag `vX.Y.Z` builds `os-activestandby-X.Y.Z.pkg` on a FreeBSD VM and attaches it, with `SHA256SUMS` and generated release notes, to a GitHub release (the daemon version comes from the tag).
 The package is unsigned: for production, host a signed repository or distribute the .pkg over a channel you trust.
 
 ## Plugins-framework build (optional)

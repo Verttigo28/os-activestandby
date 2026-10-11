@@ -15,10 +15,8 @@ import (
 const biocsetif = 0x8020426c // _IOW('B', 108, struct ifreq)
 
 // announce sends gratuitous ARPs (RFC 5227 announcement form) for every IPv4 address of dev
-// through a raw bpf write, three times 100 ms apart.
+// through a raw bpf write: immediately, then twice more 100 ms apart in the background.
 func announce(dev string) {
-	t0 := time.Now()
-	defer func() { log.Printf("  garp %s took %dms", dev, time.Since(t0).Milliseconds()) }()
 	ifc, err := net.InterfaceByName(dev)
 	if err != nil || len(ifc.HardwareAddr) != 6 {
 		return

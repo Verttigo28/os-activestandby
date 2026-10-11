@@ -6,6 +6,9 @@ on:
     tags: ['v*']
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   go:
     name: test and cross-build hasyncd
@@ -15,12 +18,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - name: vet and test
+      - name: format, vet, test (with the race detector)
         working-directory: daemon
         run: |
           gofmt -l . | tee /dev/stderr | (! read)
           go vet ./...
-          go test ./...
+          GOOS=freebsd GOARCH=amd64 go vet ./...
+          go test -race ./...
       - name: build for FreeBSD
         working-directory: daemon
         env: { GOOS: freebsd, GOARCH: amd64, CGO_ENABLED: '0' }
@@ -35,10 +39,37 @@ jobs:
             build
           retention-days: 7
 
+  plugin:
+    name: lint the GUI and script parts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+      - name: PHP syntax
+        run: find src -name '*.php' -print0 | xargs -0 -n1 php -l > /dev/null
+      - name: XML well-formedness (model, ACL, menu, forms, widget metadata)
+        run: |
+          sudo apt-get -qq install -y libxml2-utils
+          find src -name '*.xml' -print0 | xargs -0 xmllint --noout
+      - name: shell scripts
+        run: |
+          sudo apt-get -qq install -y shellcheck
+          shellcheck -S warning src/opnsense/scripts/OPNsense/ActiveStandby/*.sh src/etc/rc.d/hasyncd build/build-pkg.sh || true
+      - name: JavaScript syntax (widget and views)
+        run: |
+          node --check src/opnsense/www/js/widgets/ActiveStandby.js
+          for f in index wizard operations; do
+            perl -0ne 'while(/<script>(.*?)<\/script>/sg){print $1,"\n"}' src/opnsense/mvc/app/views/OPNsense/ActiveStandby/$f.volt \
+              | perl -pe 's/\{\{ lang\._\(.*?\) \}\}/T/g' > /tmp/$f.js
+            node --check /tmp/$f.js
+          done
+
   package:
     name: build the .pkg (tags only)
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: go
+    needs: [go, plugin]
     permissions:
       contents: write # create the GitHub release and upload the .pkg
     runs-on: ubuntu-latest
@@ -57,6 +88,11 @@ jobs:
             VERSION="${GITHUB_REF_NAME#v}"
             chmod +x src/sbin/hasyncd
             sh build/build-pkg.sh "$PWD" "$VERSION" "$PWD/dist"
+      - name: checksums
+        run: cd dist && sha256sum os-activestandby-*.pkg > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/os-activestandby-*.pkg
+          generate_release_notes: true
+          files: |
+            dist/os-activestandby-*.pkg
+            dist/SHA256SUMS

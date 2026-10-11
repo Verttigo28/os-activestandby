@@ -1,7 +1,6 @@
-# Must-have features and their test status
+# Validation
 
-Legend: **PASS** = verified in the Hyper-V lab (OPNsense 26.7, 2 cluster nodes + 1 remote IPsec peer); **HW** = needs the real Supermicro/X710 pair;
-**N/A** = out of scope by decision. IPv6 is out of scope. Evidence is in docs/PLAN.md (progress log) and docs/OPERATIONS.md.
+What was tested, how, and what still needs hardware. **PASS** = verified in the Hyper-V lab (OPNsense 26.7, two cluster nodes and one remote IPsec peer); **HW** = needs the real Supermicro/X710 pair; **N/A** = out of scope by decision (IPv6). Timing numbers are lab numbers: real NICs add link-up time.
 
 ## A. Core HA behaviour
 | # | Must have | Status | How it was tested |
@@ -87,3 +86,5 @@ Legend: **PASS** = verified in the Hyper-V lab (OPNsense 26.7, 2 cluster nodes +
 | 52 | Read-only ACL for status and metrics, audit of settings and service changes, webhook without redirects, package names from the peer validated, update log out of /tmp, hasyncd.json 0600 | PASS | From the security review. Give metrics scrapers the "read-only" privilege. |
 | 53 | Guided upgrade only when updates exist: "Check for updates" button and status, the start button is disabled (and the daemon refuses) when OPNsense's last check lists nothing | PASS (lab) | Reads the firmware check result; unchecked state asks for a check first. |
 | 54 | Upgrade job robustness: round 2 waits up to a minute for the old node to finish its demote; a handed-over job no longer blocks the next upgrade on the original node | PASS (lab) | Found by review; guided upgrade with failback ran end to end twice. |
+| 55 | GUI sessions replicate to the standby, logouts are mirrored, local standby sessions untouched | PASS (files) | Unit tests and a lab check with synthetic session files (copy within 2 s, 0600 root, removed again after deletion on the active node). A real browser login surviving a failover still has to be confirmed by hand. |
+| 56 | Races removed (lock-free timestamps), `go test -race` in CI | built | Race detector runs in CI (needs cgo, not available on the lab workstation). |

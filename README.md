@@ -1,13 +1,88 @@
 # os-activestandby
 
-SonicWall-style active/standby high availability for OPNsense 26.7+.
+**Active/standby high availability for OPNsense, in the style of SonicWall HA.**
+One IP and one MAC per interface, shared by two firewalls. The standby sits silent with its data interfaces down and takes over in about a second.
 
-- One IP per interface, **identical IP and MAC on both nodes**. No CARP VIPs.
-- The standby keeps every data interface down (no addresses, IPsec/gateway monitoring stopped); only the dedicated HA link and an optional
-  management port stay up.
-- Automatic failover in about 6 s, split-brain protection (two heartbeat paths, epoch, isolation guard), firewall states via pfsync.
-- The active node replicates its **whole** configuration (rules, NAT, VPN, users, certs, VLANs, LAGGs, assignments, plugins) as numbered
-  revisions with rollback on the standby.
+[![ci](https://github.com/Verttigo28/opn-betterHA/actions/workflows/ci.yml/badge.svg)](https://github.com/Verttigo28/opn-betterHA/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
 
-Docs: [plan and progress](docs/PLAN.md) | [operations](docs/OPERATIONS.md) | [build and install](docs/BUILD.md) |
-[phase 0 findings](docs/PHASE0-FINDINGS.md). Lab tooling and notes: [lab/README.md](lab/README.md).
+> Status: validated in a Hyper-V lab (OPNsense 26.7). Not yet validated on physical NICs and switches, see [validation](docs/validation.md). Review the [security notes](docs/security.md) before putting it in front of production traffic.
+
+## Why
+
+OPNsense's built-in HA uses CARP: every interface needs three addresses, the standby keeps answering on its own addresses, and the configuration sync is partial. This plugin takes the model most appliance firewalls use instead:
+
+|  | CARP (built-in) | os-activestandby |
+|---|---|---|
+| Addresses | virtual IP per interface + one real IP per node | **one IP and one MAC per interface, identical on both nodes** |
+| Standby | interfaces up, answers ARP/ping, runs services | **all data interfaces down, IPsec/gateway monitoring stopped** |
+| Configuration | selected areas via XMLRPC | **whole configuration**, numbered revisions with rollback on the standby |
+| Failover | CARP advertisements | heartbeat on up to two paths, epoch-based split-brain protection |
+| Switch view | two MACs per interface | one MAC, moves with the active node |
+
+## Features
+
+**Core**
+- Shared IP/MAC (generated virtual MAC by default), standby fully silent, config locked on the standby.
+- Failover: **about 0.7 s of lost traffic for a planned switch, 1.5 s when the active node loses power** (lab, detection time 1 s). Firewall states follow through pfsync.
+- Split-brain protection: two heartbeat paths, epochs, isolation guard, optional fencing hook, boot guard (a rebooted node always starts as standby).
+- Whole-config replication with revisions, integrity checks and drift detection. Plugins and DHCP leases follow the active node.
+- **GUI logins survive a failover**: sessions are replicated, so you stay logged in on the new active node.
+
+**Operations**
+- Setup wizard, and a **secondary kit**: download one file from the primary, restore it on a fresh firewall, and the pair forms by itself.
+- Maintenance mode, pre-flight check with dry-run failover, guided rolling upgrade (offered only when updates exist), preemption (optional).
+- Health monitoring of the active node (carrier, services, probe targets) with anti ping-pong guards.
+- Notifications (syslog, webhook, Monit e-mail), Prometheus metrics, failover history, audit trail of every manual action.
+
+## Quick start
+
+1. Install the package on both machines (same OPNsense version, same hardware):
+   ```sh
+   pkg add os-activestandby-<version>.pkg
+   ```
+2. On the primary: **System > Active/Standby HA > Setup wizard**, pick the HA link (a dedicated cable, static IPv4) and an optional management interface.
+3. Step 3 **Automatic**: enter hostname and HA address of the second firewall, download the kit, restore it on the second firewall (System > Configuration > Backups), reboot it. Pairing happens on its own.
+
+   Or pair manually with a one-time token (wizard on both nodes).
+4. Check **Operations > Pre-flight**. Done: edit the configuration on the active node only.
+
+Details: [getting started](docs/getting-started.md), [operations](docs/operations.md).
+
+## Documentation
+
+| | |
+|---|---|
+| [Getting started](docs/getting-started.md) | requirements, installation, the wizard, the secondary kit |
+| [Operations](docs/operations.md) | day-to-day use, failover behaviour, updating, monitoring, troubleshooting |
+| [Architecture](docs/architecture.md) | roles and state, failover pipeline, replication, design decisions |
+| [Security](docs/security.md) | threat model, controls, hardening, reporting vulnerabilities |
+| [Validation](docs/validation.md) | what was tested, how, and what still needs hardware |
+| [Building](docs/building.md) | build, CI, releases |
+| [Roadmap](docs/roadmap.md) | what is open |
+| [Changelog](CHANGELOG.md) | release history |
+
+## Requirements and limits
+
+- OPNsense 26.7 or newer (FreeBSD 15), two machines with identical NIC names, same OPNsense and plugin versions. Pairing refuses anything else.
+- Static IPv4 on the shared interfaces. DHCP/PPPoE WANs work only where the provider tolerates the MAC and a short re-login. IPv6 neighbour announcements are not implemented.
+- Not for use together with the built-in CARP/XMLRPC HA.
+- The package is unsigned: verify the SHA-256 published with each release.
+
+## Repository layout
+
+```
+daemon/    hasyncd, the Go daemon and control tool (standard library only)
+src/       files installed under /usr/local: GUI (MVC), configd actions, PHP helpers, rc script, widget
+build/     package build (FreeBSD pkg), Windows driver
+docs/      documentation
+lab/       Hyper-V lab tooling used for the validation (not part of the package)
+```
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+BSD 2-Clause, see [LICENSE](LICENSE).

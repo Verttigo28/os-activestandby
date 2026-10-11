@@ -55,7 +55,7 @@ func (d *Daemon) driftStep() {
 	}
 	switch st.State {
 	case StateStandby:
-		if time.Now().Before(d.unlockedUntil) { // the operator deliberately unlocked the config (update, settings)
+		if time.Now().Before(d.unlockedUntil.Get()) { // the operator deliberately unlocked the config (update, settings)
 			return
 		}
 		if st.ActiveSHA == "" || !d.ops.mu.TryLock() { // nothing recorded yet, or an operation is in progress

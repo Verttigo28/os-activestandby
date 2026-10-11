@@ -58,6 +58,10 @@
                 <Default>1</Default>
                 <Required>Y</Required>
             </virtual_mac>
+            <sync_sessions type="BooleanField">
+                <Default>1</Default>
+                <Required>Y</Required>
+            </sync_sessions>
             <detect_time type="IntegerField">
                 <Default>2</Default>
                 <MinimumValue>1</MinimumValue>

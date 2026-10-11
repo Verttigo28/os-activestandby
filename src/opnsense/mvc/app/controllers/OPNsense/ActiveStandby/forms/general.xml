@@ -61,6 +61,12 @@
         <help>Shared interfaces get a generated MAC address (02:...) instead of the primary's hardware address, so replacing a node never changes what the network sees. Applies to interfaces when they are first shared (pairing or kit). Existing pinned addresses stay as they are.</help>
     </field>
     <field>
+        <id>activestandby.general.sync_sessions</id>
+        <label>Keep GUI logins across a failover</label>
+        <type>checkbox</type>
+        <help>Copies the web GUI sessions of the active node to the standby, so you stay logged in after a failover. Sessions are only sent over the pinned HA connection and removed on the standby when you log out. Turn off if you do not want session data to leave the active node.</help>
+    </field>
+    <field>
         <id>activestandby.general.detect_time</id>
         <label>Failure detection time (seconds)</label>
         <type>text</type>

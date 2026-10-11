@@ -13,10 +13,10 @@ func (d *Daemon) adjustClock(m hbMsg) {
 	if drift < 0 {
 		drift = -drift
 	}
-	if drift < 2000 || time.Since(d.lastClockSet) < 30*time.Second {
+	if drift < 2000 || time.Since(d.lastClockSet.Get()) < 30*time.Second {
 		return
 	}
-	d.lastClockSet = time.Now()
+	d.lastClockSet.Set(time.Now())
 	t := time.UnixMilli(m.TimeMs + 5).UTC()
 	if out, err := sh("date", "-u", t.Format("200601021504.05")); err != nil {
 		d.event("warning", "could not set the standby clock: %v: %s", err, out)

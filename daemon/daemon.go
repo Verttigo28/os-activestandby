@@ -16,7 +16,7 @@ import (
 )
 
 // version is set at build time (-ldflags "-X main.version=...") by CI and build/build.ps1.
-var version = "0.4.3"
+var version = "0.5.0"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`
@@ -37,10 +37,12 @@ type Config struct {
 	PairToken      string `json:"pair_token"`    // secondary kit: pairing token prepared on the primary
 	DetectTime     int    `json:"detect_time"`   // seconds of heartbeat silence before the peer counts as dead
 	ProbeTargets   string `json:"probe_targets"` // comma separated IPv4 addresses the active node must be able to ping
+	SyncSessions   *bool  `json:"sync_sessions"` // replicate GUI logins to the standby (default on)
 	PairExpires    string `json:"pair_expires"`  // ... and its deadline
 }
 
-func (c Config) autoOn() bool { return c.AutoFailover == nil || *c.AutoFailover }
+func (c Config) autoOn() bool       { return c.AutoFailover == nil || *c.AutoFailover }
+func (c Config) syncSessions() bool { return c.SyncSessions == nil || *c.SyncSessions }
 
 type Daemon struct {
 	cfg           Config
@@ -52,11 +54,12 @@ type Daemon struct {
 	ops           *Ops
 	sync          *syncCtl
 	ev            *Events
-	lastClockSet  time.Time
-	unlockedUntil time.Time
+	lastClockSet  atomicTime
+	unlockedUntil atomicTime
 	localVer      string
 	verMu         sync.Mutex
 	failMu        sync.Mutex // one switchover at a time
+	sess          *sessionSync
 	peerVer       string
 	verMismatch   bool
 	auto          *autoState
@@ -109,7 +112,7 @@ func runDaemon() error {
 	if err != nil {
 		return err
 	}
-	d := &Daemon{cfg: loadConfig(), store: st, cert: cert, fp: fingerprint(cert.Certificate[0]), pairing: &Pairing{}, ops: &Ops{}, hb: newHeartbeat(), auto: &autoState{}, sync: &syncCtl{wake: make(chan struct{}, 1)}}
+	d := &Daemon{cfg: loadConfig(), store: st, cert: cert, fp: fingerprint(cert.Certificate[0]), pairing: &Pairing{}, ops: &Ops{}, hb: newHeartbeat(), auto: &autoState{}, sync: &syncCtl{wake: make(chan struct{}, 1)}, sess: newSessionSync()}
 	setDetection(d.cfg.DetectTime)
 	d.health, d.drift, d.leases, d.upd = newHealthState(), &driftState{}, &leaseState{}, &updateRun{}
 	d.ev = openEvents(st.dir)
@@ -161,6 +164,7 @@ func runDaemon() error {
 	go d.leaseLoop()
 	go d.jobLoop()
 	go d.kitLoop()
+	go d.sessionLoop()
 	d.startKitPairing()
 	go d.mgmtListener()
 	if s := d.store.Get(); s.State == StateStandby && s.ActiveSHA == "" && s.PeerFP != "" && activeValid(st.dir) {
@@ -188,6 +192,7 @@ func (d *Daemon) peerMux() *http.ServeMux {
 	mux.HandleFunc("/v1/update/status", d.post(d.paired(d.handleUpdateStatus)))
 	mux.HandleFunc("/v1/reboot", d.post(d.paired(d.handleReboot)))
 	mux.HandleFunc("/v1/job", d.post(d.paired(d.handleJobAdopt)))
+	mux.HandleFunc("/v1/sessions", d.post(d.paired(d.handleSessions)))
 	return mux
 }
 

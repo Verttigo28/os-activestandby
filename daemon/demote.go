@@ -1,0 +1,69 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+// demote: active -> standby. Fast and safe to call repeatedly.
+func (d *Daemon) demote(reason string) error { return d.demoteHook(reason, nil) }
+
+// demoteHook is demote with a callback that fires the moment the data interfaces are down (traffic has stopped), so the
+// peer can start taking over while this node still tidies up (stops IPsec/dpinger, rewrites its config).
+func (d *Daemon) demoteHook(reason string, afterDown func()) error {
+	d.ops.mu.Lock()
+	defer d.ops.mu.Unlock()
+	d.ops.bg.Wait() // a DHCP/DNS restart started by the last promote must not run after we went standby
+	t0 := time.Now()
+	log.Printf("DEMOTE (%s)", reason)
+	st := d.store.Get()
+	if st.State == StateActive {
+		// config.xml is the authoritative full config right now: keep it
+		if b, err := os.ReadFile(configPath()); err == nil && st.AckedSHA != "" && shaHex(b) != st.AckedSHA {
+			// edits the peer never received: keep them aside, the peer's config will replace this one
+			keep := filepath.Join(d.store.dir, fmt.Sprintf("unreplicated-%d.xml", time.Now().Unix()))
+			if writeFileDurable(keep, b, 0o600) == nil {
+				d.event("warning", "this node had configuration changes the peer never received; saved to %s before demoting", keep)
+			}
+		}
+		if err := copyFile(configPath(), activeXML(d.store.dir), 0o600); err != nil {
+			return fmt.Errorf("saving active config: %w", err)
+		}
+	} else if _, err := os.Stat(activeXML(d.store.dir)); err != nil {
+		return fmt.Errorf("no active.xml and node is not active; refusing to derive standby view")
+	}
+	step(t0, "active config saved")
+	set, err := d.ops.ifaces(activeXML(d.store.dir))
+	if err != nil {
+		return err
+	}
+	// interfaces first (traffic stops immediately), then rewrite the config so nothing re-enables them
+	var fw sync.WaitGroup
+	for _, dev := range set.ForceDown {
+		fw.Add(1)
+		go func(dev string) { defer fw.Done(); flushDev(dev) }(dev)
+	}
+	fw.Wait()
+	step(t0, fmt.Sprintf("%d devices down", len(set.ForceDown)))
+	if afterDown != nil {
+		afterDown()
+	}
+	for _, c := range haStop {
+		sh(c[0], c[1:]...)
+	}
+	step(t0, "ipsec/dpinger/openvpn/wireguard stopped")
+	if err := d.writeStandbyView(activeXML(d.store.dir)); err != nil {
+		return err
+	}
+	step(t0, "standby view written")
+	d.sess.trackExisting(sessionDir)
+	d.event("change", "demoted to STANDBY (%s)", reason)
+	err = d.store.Update(func(s *State) { s.State = StateStandby })
+	d.hist.add(HistoryEntry{Type: "demote", Reason: reason, DurationMs: time.Since(t0).Milliseconds(), Epoch: d.store.Get().Epoch})
+	d.recordIntegrity()
+	return err
+}

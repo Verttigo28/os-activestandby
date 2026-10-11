@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"time"
 )
 
@@ -63,4 +64,23 @@ func writeRoleMarker(st State) {
 		return
 	}
 	os.WriteFile(roleMarker, []byte(v), 0o644)
+}
+
+// atomicTime is a time stamp that goroutines can read and write without a lock (zero value = unset).
+type atomicTime struct{ v atomic.Int64 }
+
+func (a *atomicTime) Set(t time.Time) {
+	if t.IsZero() {
+		a.v.Store(0)
+		return
+	}
+	a.v.Store(t.UnixNano())
+}
+
+func (a *atomicTime) Get() time.Time {
+	n := a.v.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
 }

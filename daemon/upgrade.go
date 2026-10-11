@@ -307,7 +307,7 @@ func (d *Daemon) handleUpdateStart(w http.ResponseWriter, r *http.Request) {
 	}
 	d.upd.running, d.upd.done, d.upd.rc = true, false, 0
 	d.upd.mu.Unlock()
-	d.unlockedUntil = time.Now().Add(60 * time.Minute) // migrations must be able to write the config
+	d.unlockedUntil.Set(time.Now().Add(60 * time.Minute)) // migrations must be able to write the config
 	unlockConfig()
 	proxy := "http://" + peerHostPort(st, proxyPort(d.cfg))
 	go func() {
