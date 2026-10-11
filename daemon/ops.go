@@ -149,7 +149,11 @@ func flushDev(dev string) {
 }
 
 // demote: active -> standby. Fast and safe to call repeatedly.
-func (d *Daemon) demote(reason string) error {
+func (d *Daemon) demote(reason string) error { return d.demoteHook(reason, nil) }
+
+// demoteHook is demote with a callback that fires the moment the data interfaces are down (traffic has stopped), so the
+// peer can start taking over while this node still tidies up (stops IPsec/dpinger, rewrites its config).
+func (d *Daemon) demoteHook(reason string, afterDown func()) error {
 	d.ops.mu.Lock()
 	defer d.ops.mu.Unlock()
 	t0 := time.Now()
@@ -171,10 +175,6 @@ func (d *Daemon) demote(reason string) error {
 		return fmt.Errorf("no active.xml and node is not active; refusing to derive standby view")
 	}
 	step(t0, "active config saved")
-	for _, c := range haStop {
-		sh(c[0], c[1:]...)
-	}
-	step(t0, "ipsec/dpinger/openvpn/wireguard stopped")
 	set, err := d.ops.ifaces(activeXML(d.store.dir))
 	if err != nil {
 		return err
@@ -187,6 +187,13 @@ func (d *Daemon) demote(reason string) error {
 	}
 	fw.Wait()
 	step(t0, fmt.Sprintf("%d devices down", len(set.ForceDown)))
+	if afterDown != nil {
+		afterDown()
+	}
+	for _, c := range haStop {
+		sh(c[0], c[1:]...)
+	}
+	step(t0, "ipsec/dpinger/openvpn/wireguard stopped")
 	if err := d.writeStandbyView(activeXML(d.store.dir)); err != nil {
 		return err
 	}
@@ -229,7 +236,7 @@ func (d *Daemon) promote(reason string) error {
 		return err
 	}
 	// virtual devices (VLAN, LAGG, ...) exist only if something created them: do it before bringing interfaces up
-	if len(set.DeviceTypes) > 0 {
+	if len(set.DeviceTypes) > 0 && !virtualDevicesPresent(set) {
 		if out, err := sh(devicesScript); err != nil {
 			log.Printf("promote: creating virtual devices: %v: %s", err, out)
 			d.event("error", "creating the virtual devices (VLAN/LAGG/...) failed: %s", strings.TrimSpace(out))
@@ -367,6 +374,9 @@ func (d *Daemon) enforceLoop() {
 	tick := 0
 	for range time.Tick(time.Second) {
 		tick++
+		if tick%60 == 1 {
+			hardenFiles(d.store.dir)
+		}
 		d.ensureConfigLock()
 		if d.store.Get().State != StateStandby {
 			continue
@@ -511,3 +521,22 @@ func bootGuard() error {
 }
 
 var virtualDev = regexp.MustCompile(`^(vlan|lagg|bridge|gre|gif|epair|vxlan|qinq|tap|tun|ovpn|wg)[0-9]`)
+
+// virtualDevicesPresent: the devices survive on a standby (they are only taken down), so the slow device script is skipped
+// when every virtual device of the data interfaces still exists.
+func virtualDevicesPresent(set IfaceSet) bool {
+	all, err := sh("ifconfig", "-l")
+	if err != nil {
+		return false
+	}
+	have := map[string]bool{}
+	for _, n := range strings.Fields(all) {
+		have[n] = true
+	}
+	for _, i := range set.Data {
+		if i.Virtual && !have[i.Dev] {
+			return false
+		}
+	}
+	return true
+}

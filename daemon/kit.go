@@ -54,6 +54,11 @@ func (d *Daemon) startKitPairing() {
 }
 
 func (d *Daemon) registerKit(mux *http.ServeMux) {
+	mux.HandleFunc("/audit", func(w http.ResponseWriter, r *http.Request) {
+		msg := regexp.MustCompile(`[^A-Za-z0-9._:1776 1776]`).ReplaceAllString(r.URL.Query().Get("msg"), "")
+		d.event("info", "AUDIT %s", msg)
+		writeJSON(w, 200, map[string]string{"status": "ok"})
+	})
 	mux.HandleFunc("/kit", d.ctlKit)
 	mux.HandleFunc("/kit/cancel", func(w http.ResponseWriter, r *http.Request) {
 		d.store.Update(func(s *State) { s.Kit = nil })

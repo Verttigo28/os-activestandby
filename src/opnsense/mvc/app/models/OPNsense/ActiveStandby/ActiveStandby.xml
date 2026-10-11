@@ -49,6 +49,17 @@
                 <Default>0</Default>
                 <Required>Y</Required>
             </health_services>
+            <probe_targets type="TextField">
+                <Required>N</Required>
+                <Mask>/^(([0-9]{1,3}[.]){3}[0-9]{1,3}(,([0-9]{1,3}[.]){3}[0-9]{1,3}){0,4})?$/</Mask>
+                <ValidationMessage>Enter up to five IPv4 addresses separated by commas.</ValidationMessage>
+            </probe_targets>
+            <detect_time type="IntegerField">
+                <Default>2</Default>
+                <MinimumValue>1</MinimumValue>
+                <MaximumValue>30</MaximumValue>
+                <Required>Y</Required>
+            </detect_time>
             <health_hold type="IntegerField">
                 <Default>6</Default>
                 <MinimumValue>3</MinimumValue>

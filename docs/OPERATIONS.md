@@ -71,5 +71,7 @@ By default pairing pins the PRIMARY node's current MAC on every data interface. 
 3. The primary keeps trying to reach the HA address and pairs with the new node by itself (the Status page shows "Waiting for the second firewall"). The file is valid for 48 hours, contains secrets and should be deleted afterwards.
 The kit is the silent standby view of the primary's config: the second firewall does not touch the shared addresses until it is paired.
 
+Detection and takeover: planned failover 0.65-0.85 s outage, unplanned (power cut) 1.5 s with detection time 1 s; the default detection time is 2 s. 
+
 ## Failover timing (lab, Hyper-V, 4 interfaces + VLAN + LAGG)
 Manual failover: about 1.1–1.5 s of lost traffic (a 20 ms ping from the PC), 1.3–1.9 s for the whole call. Earlier builds needed about 6 s. Where the time goes on the new active node: virtual devices 0.33 s, interfaces 0.4–0.6 s, pf reload and services 0.4 s; the DNS/DHCP restart (0.6 s) runs afterwards in the background. Real NICs add link-up time (typically 1–3 s for copper) that the lab cannot show. The standby also waits while the peer reports it is promoting (heartbeat `busy`).

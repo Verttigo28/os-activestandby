@@ -11,8 +11,20 @@ use OPNsense\Core\Backend;
  */
 class PairingController extends ApiControllerBase
 {
+    private const MUTATING = ['ctl_prepare', 'ctl_cancel', 'ctl_pair', 'ctl_break', 'ctl_failover', 'ctl_failover_force', 'ctl_promote',
+        'ctl_promote_force', 'ctl_demote', 'ctl_resync', 'ctl_maintenance', 'ctl_upgrade_start', 'ctl_upgrade_start_failback',
+        'ctl_upgrade_cancel', 'ctl_kit', 'ctl_kit_cancel'];
+
     private function ctl(string $action, array $params = []): array
     {
+        if (in_array($action, self::MUTATING, true)) {
+            // audit trail: who did what, from where (written to the HA event log and syslog)
+            $who = preg_replace('/[^A-Za-z0-9._-]/', '', (string)($this->session->get('Username') ?? 'api'));
+            $ip = preg_replace('/[^0-9a-fA-F.:]/', '', (string)$this->request->getClientAddress());
+            $mark = substr($action, 4) . ':by:' . $who . ':from:' . $ip;
+            syslog(LOG_NOTICE, 'activestandby audit ' . $mark);
+            (new Backend())->configdpRun('activestandby ctl_audit', [$mark]);
+        }
         $out = trim((new Backend())->configdpRun("activestandby $action", $params));
         $json = json_decode($out, true);
         return is_array($json) ? $json : ['error' => $out === '' ? 'no answer from hasyncd' : $out];

@@ -5,6 +5,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -27,4 +29,20 @@ func peerURL(st State, path string) string { return "https://" + peerHostPort(st
 func execShell(script string) (string, error) {
 	out, err := exec.Command("/bin/sh", "-c", script).CombinedOutput()
 	return string(out), err
+}
+
+// hardenFiles keeps the saved copies of the full configuration (password hashes, VPN keys) readable by root only and
+// stops the "unreplicated-*.xml" safety copies from piling up.
+func hardenFiles(dir string) {
+	for _, n := range []string{"active.xml", "active.xml.prev", "last-incoming.xml", "state.json", "state.json.bak"} {
+		if fi, err := os.Stat(filepath.Join(dir, n)); err == nil && fi.Mode().Perm()&0o077 != 0 {
+			os.Chmod(filepath.Join(dir, n), 0o600)
+		}
+	}
+	old, _ := filepath.Glob(filepath.Join(dir, "unreplicated-*.xml"))
+	sort.Strings(old) // the name carries a unix timestamp
+	for len(old) > 5 {
+		os.Remove(old[0])
+		old = old[1:]
+	}
 }

@@ -48,6 +48,18 @@
         <help>Restart the packet filter and IPsec if they die on the active node; switch roles if that does not help.</help>
     </field>
     <field>
+        <id>activestandby.general.probe_targets</id>
+        <label>Probe targets</label>
+        <type>text</type>
+        <help>Optional. IPv4 addresses (for example the upstream router) that the active node pings every 2 seconds. If none answers for the failure hold time and the standby has link on the same ports, roles are switched. Use addresses that only THIS node's uplink can lose; an outage upstream of both nodes cannot be fixed by switching.</help>
+    </field>
+    <field>
+        <id>activestandby.general.detect_time</id>
+        <label>Failure detection time (seconds)</label>
+        <type>text</type>
+        <help>How long the other node must be silent on every heartbeat path before it counts as dead. Lower means faster automatic failover (1-2 s) but more risk of a needless switch on a loaded or flaky link. Same value on both nodes.</help>
+    </field>
+    <field>
         <id>activestandby.general.health_hold</id>
         <label>Failure hold time (seconds)</label>
         <type>text</type>

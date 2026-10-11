@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -121,6 +122,11 @@ func (d *Daemon) healthStep() {
 	if d.cfg.HealthServices {
 		d.checkServices(failures)
 	}
+	if d.cfg.ProbeTargets != "" {
+		if msg := d.probeFailed(); msg != "" {
+			failures["probe"] = msg
+		}
+	}
 
 	now := time.Now()
 	h.mu.Lock()
@@ -237,4 +243,37 @@ func (d *Daemon) checkServices(failures map[string]string) {
 			restart("ipsec", "configctl", "ipsec", "restart")
 		}
 	}
+}
+
+// probeFailed pings the configured probe targets (e.g. the upstream router) from the active node, all at once. Only when
+// none of them answers does it report a failure, so one flaky target never triggers anything.
+func (d *Daemon) probeFailed() string {
+	var targets []string
+	for _, t := range strings.Split(d.cfg.ProbeTargets, ",") {
+		if ip := net.ParseIP(strings.TrimSpace(t)); ip != nil && ip.To4() != nil {
+			targets = append(targets, ip.String())
+		}
+	}
+	if len(targets) == 0 {
+		return ""
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	up := 0
+	for _, t := range targets {
+		wg.Add(1)
+		go func(t string) {
+			defer wg.Done()
+			if _, err := sh("ping", "-c", "1", "-t", "1", t); err == nil {
+				mu.Lock()
+				up++
+				mu.Unlock()
+			}
+		}(t)
+	}
+	wg.Wait()
+	if up == 0 {
+		return "none of the probe targets answers (" + strings.Join(targets, ", ") + ")"
+	}
+	return ""
 }

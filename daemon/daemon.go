@@ -33,8 +33,10 @@ type Config struct {
 	MonitorIfaces  string `json:"monitor_interfaces"`
 	HealthServices bool   `json:"health_services"`
 	HealthHold     int    `json:"health_hold"`
-	PairToken      string `json:"pair_token"`   // secondary kit: pairing token prepared on the primary
-	PairExpires    string `json:"pair_expires"` // ... and its deadline
+	PairToken      string `json:"pair_token"`    // secondary kit: pairing token prepared on the primary
+	DetectTime     int    `json:"detect_time"`   // seconds of heartbeat silence before the peer counts as dead
+	ProbeTargets   string `json:"probe_targets"` // comma separated IPv4 addresses the active node must be able to ping
+	PairExpires    string `json:"pair_expires"`  // ... and its deadline
 }
 
 func (c Config) autoOn() bool { return c.AutoFailover == nil || *c.AutoFailover }
@@ -106,6 +108,7 @@ func runDaemon() error {
 		return err
 	}
 	d := &Daemon{cfg: loadConfig(), store: st, cert: cert, fp: fingerprint(cert.Certificate[0]), pairing: &Pairing{}, ops: &Ops{}, hb: newHeartbeat(), auto: &autoState{}, sync: &syncCtl{wake: make(chan struct{}, 1)}}
+	setDetection(d.cfg.DetectTime)
 	d.health, d.drift, d.leases, d.upd = newHealthState(), &driftState{}, &leaseState{}, &updateRun{}
 	d.ev = openEvents(st.dir)
 	d.ev.sink = d.notify

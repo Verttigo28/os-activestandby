@@ -15,10 +15,23 @@ import (
 	"time"
 )
 
-const (
+// hbDead: no heartbeat on a path for this long = path dead (the failure detection time, setting "detect_time").
+// Heartbeats go out several times per detection period so one lost packet never triggers anything.
+var (
 	hbInterval = 500 * time.Millisecond
-	hbDead     = 3 * time.Second // no heartbeat on a path for this long = path dead
+	hbDead     = 3 * time.Second
 )
+
+func setDetection(sec int) {
+	if sec < 1 || sec > 30 {
+		sec = 3
+	}
+	hbDead = time.Duration(sec) * time.Second
+	hbInterval = hbDead / 8
+	if hbInterval < 150*time.Millisecond {
+		hbInterval = 150 * time.Millisecond
+	}
+}
 
 type hbMsg struct {
 	Role   string `json:"role"`
@@ -266,10 +279,27 @@ func (d *Daemon) failover(force bool) (string, error) {
 		return "", fmt.Errorf("peer state is %q, expected standby", peer.State)
 	}
 	t0 := time.Now()
-	if err := d.demote("failover"); err != nil {
-		return "", fmt.Errorf("demote failed: %w", err)
+	// the peer is told to promote as soon as our interfaces are down, while we finish tidying up
+	var perr error
+	done := make(chan struct{})
+	fired := false
+	derr := d.demoteHook("failover", func() {
+		fired = true
+		go func() {
+			_, perr = d.peerCall("/v1/promote", 90*time.Second)
+			close(done)
+		}()
+	})
+	if fired {
+		<-done
 	}
-	if _, err := d.peerCall("/v1/promote", 90*time.Second); err != nil {
+	if derr != nil {
+		return "", fmt.Errorf("demote failed: %w", derr)
+	}
+	if err := perr; fired && err != nil || !fired {
+		if !fired {
+			err = errors.New("demote did not complete")
+		}
 		perr := d.promote("failover rollback")
 		return "", fmt.Errorf("peer did not take over (%v); rolled back (rollback error: %v)", err, perr)
 	}

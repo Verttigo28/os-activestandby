@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -190,6 +191,7 @@ func runCtl(args []string) int {
 	force := fs.Bool("force", false, "")
 	hours := fs.Int("hours", defaultMaintenanceHours, "")
 	failback := fs.Bool("failback", false, "")
+	amsg := fs.String("msg", "", "")
 	kha := fs.String("ha", "", "")
 	kmgmt := fs.String("mgmt", "", "")
 	khost := fs.String("hostname", "", "")
@@ -223,6 +225,8 @@ func runCtl(args []string) int {
 	case "kit":
 		b, _ := json.Marshal(map[string]string{"ha": *kha, "mgmt": *kmgmt, "hostname": *khost})
 		resp, err = cl.Post("http://ctl/kit", "application/json", bytes.NewReader(b))
+	case "audit":
+		resp, err = cl.Post("http://ctl/audit?msg="+url.QueryEscape(*amsg), "application/json", nil)
 	case "kit-cancel":
 		resp, err = cl.Post("http://ctl/kit/cancel", "application/json", nil)
 	case "health", "metrics", "history", "preflight":
