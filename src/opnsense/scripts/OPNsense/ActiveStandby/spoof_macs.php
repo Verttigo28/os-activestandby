@@ -3,9 +3,10 @@
 
 /*
  * Run on the MASTER right after pairing.
- * Pins the live MAC address of every enabled data interface into <spoofmac> in config.xml.
- * For the running master this changes nothing (the MAC is already in use), but the config that is
- * replicated to the standby then makes the standby's interfaces come up with identical MACs.
+ * Gives every enabled data interface a shared MAC in <spoofmac> (config.xml) that both nodes will use.
+ * Default: a generated locally administered "virtual" MAC (02:xx:...), independent of either node's hardware, so
+ * replacing a node never changes the MAC the network sees. With the setting off the live hardware MAC is pinned
+ * instead (a no-op for the running master). Interfaces that already have a <spoofmac> are left alone.
  * The HA link and the management interface are node-local and are never touched.
  */
 
@@ -22,6 +23,13 @@ if (count($skip) == 0) {
     exit(1);
 }
 
+$virtual = (string)$mdl->general->virtual_mac !== '0';
+$used = [];
+foreach (Config::getInstance()->object()->interfaces->children() as $n) {
+    if ((string)$n->spoofmac !== '') {
+        $used[strtolower((string)$n->spoofmac)] = true;
+    }
+}
 $details = legacy_interfaces_details();
 $cfg = Config::getInstance()->object();
 $pinned = [];
@@ -38,8 +46,15 @@ foreach ($cfg->interfaces->children() as $key => $node) {
         continue; // not an ethernet-like device (loopback, tunnel, multicast/zero address, ...)
     }
     if ((string)$node->spoofmac === '') {
-        $node->spoofmac = strtolower($mac);
-        $pinned[] = "$key($dev)=" . strtolower($mac);
+        $new = strtolower($mac);
+        if ($virtual) {
+            do {
+                $new = sprintf('02:%s', implode(':', str_split(bin2hex(random_bytes(5)), 2)));
+            } while (isset($used[$new]));
+            $used[$new] = true;
+        }
+        $node->spoofmac = $new;
+        $pinned[] = "$key($dev)=" . $new;
     }
 }
 

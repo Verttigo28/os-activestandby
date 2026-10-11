@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -52,6 +53,9 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 		if name == "os-activestandby" {
 			continue // this plugin ships with the node
 		}
+		if !pkgName.MatchString(name) { // the name comes from the peer: never let it look like an option or contain odd characters
+			continue
+		}
 		if !ok || hv != ver {
 			install = append(install, name)
 		}
@@ -63,7 +67,7 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 	st := d.store.Get()
 	proxy := "http://" + net.JoinHostPort(st.PeerAddr, fmt.Sprint(proxyPort(d.cfg)))
 	d.event("info", "installing %d plugin(s) replicated from the active node: %s", len(install), strings.Join(install, ", "))
-	cmd := exec.Command("pkg", append([]string{"install", "-y"}, install...)...)
+	cmd := exec.Command("pkg", append([]string{"install", "-y", "--"}, install...)...)
 	cmd.Env = append(os.Environ(), "HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy, "ASSUME_ALWAYS_YES=yes")
 	done := make(chan struct{})
 	var out []byte
@@ -91,3 +95,5 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 	d.event("change", "installed on the standby: %s", strings.Join(install, ", "))
 	return nil
 }
+
+var pkgName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._-]{0,80}$`)

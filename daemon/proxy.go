@@ -110,7 +110,7 @@ func (d *Daemon) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 func (d *Daemon) proxyListener(haIP string) {
 	addr := net.JoinHostPort(haIP, fmt.Sprint(proxyPort(d.cfg)))
-	srv := &http.Server{Addr: addr, Handler: http.HandlerFunc(d.proxyHandler), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: http.HandlerFunc(d.proxyHandler), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Printf("update proxy for the standby listening on %s", addr)
 	log.Printf("update proxy ended: %v", srv.ListenAndServe())
 }

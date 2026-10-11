@@ -54,6 +54,13 @@
         <help>Optional. IPv4 addresses (for example the upstream router) that the active node pings every 2 seconds. If none answers for the failure hold time and the standby has link on the same ports, roles are switched. Use addresses that only THIS node's uplink can lose; an outage upstream of both nodes cannot be fixed by switching.</help>
     </field>
     <field>
+        <id>activestandby.general.virtual_mac</id>
+        <label>Use a virtual MAC address</label>
+        <type>checkbox</type>
+        <advanced>true</advanced>
+        <help>Shared interfaces get a generated MAC address (02:...) instead of the primary's hardware address, so replacing a node never changes what the network sees. Applies to interfaces when they are first shared (pairing or kit). Existing pinned addresses stay as they are.</help>
+    </field>
+    <field>
         <id>activestandby.general.detect_time</id>
         <label>Failure detection time (seconds)</label>
         <type>text</type>

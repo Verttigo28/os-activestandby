@@ -1,9 +1,22 @@
 <acl>
     <page-system-activestandby>
-        <name>System: Active/Standby HA</name>
+        <name>System: Active/Standby HA (full control)</name>
         <patterns>
             <pattern>ui/activestandby/*</pattern>
             <pattern>api/activestandby/*</pattern>
         </patterns>
     </page-system-activestandby>
+    <page-system-activestandby-view>
+        <name>System: Active/Standby HA (read-only status and metrics)</name>
+        <patterns>
+            <pattern>ui/activestandby</pattern>
+            <pattern>ui/activestandby/index</pattern>
+            <pattern>api/activestandby/pairing/status</pattern>
+            <pattern>api/activestandby/pairing/events</pattern>
+            <pattern>api/activestandby/pairing/history</pattern>
+            <pattern>api/activestandby/pairing/health</pattern>
+            <pattern>api/activestandby/pairing/upgradestatus</pattern>
+            <pattern>api/activestandby/metrics/*</pattern>
+        </patterns>
+    </page-system-activestandby-view>
 </acl>

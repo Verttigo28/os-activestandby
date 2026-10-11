@@ -24,6 +24,7 @@ type healthState struct {
 	lastRestart map[string]time.Time
 	warned      map[string]bool
 	links       map[string]bool // carrier of this node's data devices, sent in every heartbeat
+	graceUntil  time.Time       // no health switching right after a promote (DHCP/PPPoE WAN, gateways, services still coming up)
 	devMu       sync.Mutex
 	devPath     string
 	devMtime    time.Time
@@ -105,7 +106,10 @@ func (d *Daemon) healthStep() {
 	h.links = links
 	h.mu.Unlock()
 
-	if st.State != StateActive || !d.cfg.autoOn() || d.maintenanceOn() {
+	h.mu.Lock()
+	inGrace := time.Now().Before(h.graceUntil)
+	h.mu.Unlock()
+	if st.State != StateActive || !d.cfg.autoOn() || d.maintenanceOn() || inGrace {
 		h.mu.Lock()
 		h.failSince, h.reasons = map[string]time.Time{}, nil
 		h.mu.Unlock()
@@ -276,4 +280,12 @@ func (d *Daemon) probeFailed() string {
 		return "none of the probe targets answers (" + strings.Join(targets, ", ") + ")"
 	}
 	return ""
+}
+
+// startGrace: called after a promote. Health checks wait at least 30 s (or the hold time if longer) before they can
+// switch roles again, so a WAN that needs a DHCP lease or PPPoE login does not bounce the role straight back.
+func (h *healthState) startGrace() {
+	h.mu.Lock()
+	h.graceUntil = time.Now().Add(30 * time.Second)
+	h.mu.Unlock()
 }

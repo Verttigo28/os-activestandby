@@ -279,7 +279,8 @@ type updateRun struct {
 	log     string
 }
 
-const updateLog = "/tmp/hasyncd-update.log"
+// kept in the root-only state directory: a fixed name in /tmp could be pre-created as a symlink by a local user
+const updateLog = "/conf/activestandby/update.log"
 
 func (d *Daemon) handleUpdateStart(w http.ResponseWriter, r *http.Request) {
 	st := d.store.Get()

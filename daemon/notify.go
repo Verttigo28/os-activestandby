@@ -56,7 +56,7 @@ func (d *Daemon) postWebhook(ev Event) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "hasyncd/"+version)
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
 	if err != nil {
 		return
 	}

@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -295,8 +297,39 @@ func (d *Daemon) pinMACs() bool {
 		return false
 	}
 	if strings.HasPrefix(out, "pinned") {
-		d.event("change", "pinned shared MAC for new interface(s): %s", strings.TrimPrefix(out, "pinned "))
+		d.event("change", "shared MAC set for new interface(s): %s", strings.TrimPrefix(out, "pinned "))
+		d.applyPinned(out)
 		return true
 	}
 	return false
+}
+
+var pinnedKey = regexp.MustCompile(`(w+)([^)]*)=`)
+
+// applyPinned makes a freshly written virtual MAC take effect on this (running, active) node: the interface is
+// reconfigured (about a second of interruption on it) and the network is told with a gratuitous ARP.
+func (d *Daemon) applyPinned(out string) {
+	var wg sync.WaitGroup
+	for _, m := range pinnedKey.FindAllStringSubmatch(out, -1) {
+		wg.Add(1)
+		go func(key string) {
+			defer wg.Done()
+			if o, err := sh(reconfScript, "iface", key); err != nil {
+				log.Printf("applying the shared MAC on %s: %v: %s", key, err, o)
+			}
+		}(m[1])
+	}
+	wg.Wait()
+	set, err := d.ops.ifaces(configPath())
+	if err != nil {
+		return
+	}
+	for _, i := range set.Data {
+		if strings.Contains(out, i.Key+"(") {
+			if d.cfg.ForcePromisc {
+				sh("ifconfig", i.Dev, "promisc")
+			}
+			announce(i.Dev)
+		}
+	}
 }

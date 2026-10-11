@@ -11,7 +11,7 @@ Push-Location "$root\daemon"
 & $go vet ./... ; if ($LASTEXITCODE) { throw 'go vet failed' }
 & $go test ./... ; if ($LASTEXITCODE) { throw 'go test failed' }
 $env:GOOS = 'freebsd'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
-& $go build -trimpath -ldflags "-s -w" -o "$root\src\sbin\hasyncd" . ; if ($LASTEXITCODE) { throw 'go build failed' }
+& $go build -trimpath -ldflags "-s -w -X main.version=$Version" -o "$root\src\sbin\hasyncd" . ; if ($LASTEXITCODE) { throw 'go build failed' }
 Remove-Item Env:GOOS, Env:GOARCH, Env:CGO_ENABLED
 Pop-Location
 

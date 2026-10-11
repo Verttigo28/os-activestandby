@@ -30,10 +30,12 @@ import (
 const pairWindow = 10 * time.Minute
 
 type pairSession struct {
-	token   []byte
-	expires time.Time
-	fails   int
-	hellos  map[string]helloState
+	token      []byte
+	expires    time.Time
+	fails      int
+	hellos     map[string]helloState
+	helloFails map[string]int // failed hellos per source address
+	blocked    map[string]time.Time
 }
 
 type helloState struct{ nonceB, fpA string }
@@ -41,7 +43,11 @@ type helloState struct{ nonceB, fpA string }
 type helloReq struct {
 	NonceA string `json:"nonce_a"`
 	Info   Info   `json:"info"`
+	Proof  string `json:"proof_h"` // HMAC(token, "H|fpA|nonceA"): the caller must know the token before we say anything about this node
 }
+
+func helloProof(token []byte, fpA, nA string) string { return proof(token, "H", fpA, "", nA, "") }
+
 type helloResp struct {
 	NonceB string   `json:"nonce_b"`
 	Info   Info     `json:"info"`
@@ -93,7 +99,7 @@ func (p *Pairing) Start() (string, time.Time, error) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.s = &pairSession{token: normToken(t), expires: time.Now().Add(pairWindow), hellos: map[string]helloState{}}
+	p.s = &pairSession{token: normToken(t), expires: time.Now().Add(pairWindow), hellos: map[string]helloState{}, helloFails: map[string]int{}, blocked: map[string]time.Time{}}
 	return t, p.s.expires, nil
 }
 
@@ -128,7 +134,7 @@ func (d *Daemon) handleHello(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req helloReq
-	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil || req.NonceA == "" {
+	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil || len(req.NonceA) != 32 {
 		writeJSON(w, 400, helloResp{Error: "bad request"})
 		return
 	}
@@ -143,10 +149,28 @@ func (d *Daemon) handleHello(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 409, helloResp{Error: "node is already paired; break the pair first"})
 		return
 	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	now := time.Now()
+	if until, ok := p.s.blocked[ip]; ok && now.Before(until) {
+		writeJSON(w, 429, helloResp{Error: "too many failed attempts, try again in a minute"})
+		return
+	}
+	if !hmac.Equal([]byte(req.Proof), []byte(helloProof(p.s.token, fpA, req.NonceA))) {
+		p.s.helloFails[ip]++
+		if p.s.helloFails[ip] >= 10 {
+			p.s.blocked[ip] = now.Add(time.Minute)
+			p.s.helloFails[ip] = 0
+		}
+		writeJSON(w, 403, helloResp{Error: "authentication failed (wrong pairing token?)"})
+		return
+	}
 	local := collectInfo()
 	if diffs := req.Info.Compare(local); len(diffs) > 0 {
 		writeJSON(w, 409, helloResp{Error: "nodes are not identical, refusing to pair", Diffs: diffs})
 		return
+	}
+	if len(p.s.hellos) >= 64 { // unauthenticated so far: never let it grow without bound
+		p.s.hellos = map[string]helloState{}
 	}
 	nB := randHex(16)
 	p.s.hellos[req.NonceA] = helloState{nonceB: nB, fpA: fpA}
@@ -173,7 +197,11 @@ func (d *Daemon) handleConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, ok := p.s.hellos[req.NonceA]
-	if !ok || h.fpA != fpA ||
+	if !ok {
+		writeJSON(w, 403, map[string]string{"error": "authentication failed"}) // no hello on record: cannot be the real peer, and does not count against the window
+		return
+	}
+	if h.fpA != fpA ||
 		!hmac.Equal([]byte(req.Proof), []byte(proof(p.s.token, "A", fpA, d.fp, req.NonceA, h.nonceB))) {
 		p.s.fails++
 		if p.s.fails >= 5 {
@@ -234,9 +262,9 @@ func (d *Daemon) doPair(peer string, port int, tokenStr string) (*PairResult, []
 	local := collectInfo()
 	nA := randHex(16)
 
-	post := func(path string, in, out any) (int, error) {
+	post := func(c *http.Client, path string, in, out any) (int, error) {
 		b, _ := json.Marshal(in)
-		resp, err := cl.Post(base+path, "application/json", bytes.NewReader(b))
+		resp, err := c.Post(base+path, "application/json", bytes.NewReader(b))
 		if err != nil {
 			return 0, err
 		}
@@ -245,7 +273,7 @@ func (d *Daemon) doPair(peer string, port int, tokenStr string) (*PairResult, []
 	}
 
 	var hr helloResp
-	code, err := post("/pair/hello", helloReq{NonceA: nA, Info: local}, &hr)
+	code, err := post(cl, "/pair/hello", helloReq{NonceA: nA, Info: local, Proof: helloProof(token, fingerprint(d.cert.Certificate[0]), nA)}, &hr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cannot reach peer: %w", err)
 	}
@@ -260,7 +288,10 @@ func (d *Daemon) doPair(peer string, port int, tokenStr string) (*PairResult, []
 		return nil, diffs, errors.New("nodes are not identical, refusing to pair")
 	}
 	var cr map[string]string
-	code, err = post("/pair/confirm", confirmReq{NonceA: nA, Proof: proof(token, "A", fpA, fpB, nA, hr.NonceB)}, &cr)
+	// the confirm goes over a NEW connection: it must reach the very node whose certificate answered the hello, or a
+	// man-in-the-middle could relay the hello and answer the confirm with its own certificate (which we would then pin)
+	pinned := d.peerClient(fpB, nil)
+	code, err = post(pinned, "/pair/confirm", confirmReq{NonceA: nA, Proof: proof(token, "A", fpA, fpB, nA, hr.NonceB)}, &cr)
 	if err != nil || code != 200 {
 		if err == nil {
 			err = errors.New(cr["error"])

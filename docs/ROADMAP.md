@@ -28,7 +28,7 @@ Ranked by what I would do first. P1 = I would not call it production-ready witho
 
 ## P3 — nice to have
 12. Config diff viewer between the nodes' saved configurations; "what will change on failover" preview.
-13. Selectable **virtual MAC** at pairing (generate a locally administered MAC per interface instead of copying the primary's hardware MAC).
+13. (DONE v0.4.2) Selectable **virtual MAC** at pairing (generate a locally administered MAC per interface instead of copying the primary's hardware MAC).
 14. Per-service opt-out (e.g. keep an NTP or DNS service running on the standby), and a stricter option to stop everything except the HA stack.
 15. Bridge/GRE/GIF/VXLAN and LACP-with-switch failover verification, more VPN types (WireGuard and OpenVPN tested the way IPsec was).
 16. Optional encryption/authentication of pfsync (IPsec on the HA link) when the link is not a dedicated cable.

@@ -24,7 +24,9 @@ jobs:
       - name: build for FreeBSD
         working-directory: daemon
         env: { GOOS: freebsd, GOARCH: amd64, CGO_ENABLED: '0' }
-        run: go build -trimpath -ldflags '-s -w' -o ../src/sbin/hasyncd .
+        run: |
+          V=dev; case "$GITHUB_REF" in refs/tags/v*) V="${GITHUB_REF_NAME#v}";; esac
+          go build -trimpath -ldflags "-s -w -X main.version=$V" -o ../src/sbin/hasyncd .
       - uses: actions/upload-artifact@v4
         with:
           name: src-with-daemon
@@ -37,6 +39,8 @@ jobs:
     name: build the .pkg (tags only)
     if: startsWith(github.ref, 'refs/tags/v')
     needs: go
+    permissions:
+      contents: write # create the GitHub release and upload the .pkg
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

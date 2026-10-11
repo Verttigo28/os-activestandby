@@ -15,7 +15,8 @@ import (
 	"time"
 )
 
-const version = "0.4.0"
+// version is set at build time (-ldflags "-X main.version=...") by CI and build/build.ps1.
+var version = "0.4.2"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`
@@ -55,6 +56,7 @@ type Daemon struct {
 	unlockedUntil time.Time
 	localVer      string
 	verMu         sync.Mutex
+	failMu        sync.Mutex // one switchover at a time
 	peerVer       string
 	verMismatch   bool
 	auto          *autoState
@@ -145,7 +147,7 @@ func runDaemon() error {
 		Addr:              listen,
 		Handler:           d.peerMux(),
 		TLSConfig:         d.peerTLS(),
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second,
 	}
 	go func() { log.Fatal(d.serveCtl()) }()
 	go d.hbLoop()
@@ -275,7 +277,7 @@ func (d *Daemon) mgmtListener() {
 		}
 		d.mgmtIP.Store(ip)
 		srv := &http.Server{Addr: net.JoinHostPort(ip, fmt.Sprint(d.cfg.ListenPort)), Handler: d.peerMux(),
-			TLSConfig: d.peerTLS(), ReadHeaderTimeout: 10 * time.Second}
+			TLSConfig: d.peerTLS(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second}
 		log.Printf("secondary heartbeat path listening on %s", srv.Addr)
 		log.Printf("mgmt listener ended: %v", srv.ListenAndServeTLS("", ""))
 		d.mgmtIP.Store("")

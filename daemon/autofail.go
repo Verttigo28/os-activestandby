@@ -81,7 +81,7 @@ func (d *Daemon) autoStep() {
 	switch st.State {
 	case StateActive:
 		d.auto.setBlocked("")
-		if alive && peer.State == StateActive {
+		if alive && peer.State == StateActive && !peer.Busy {
 			if d.auto.dualSince.IsZero() {
 				d.auto.dualSince = time.Now()
 				d.event("error", "SPLIT-BRAIN: both nodes active (my epoch %d, peer %d)", st.Epoch, peer.Epoch)
@@ -110,6 +110,7 @@ func (d *Daemon) autoStep() {
 		}
 		if alive {
 			if peer.State == StateActive {
+				d.auto.peerBusySince = time.Time{}
 				d.auto.noActiveSince = time.Time{}
 				d.auto.setBlocked("")
 				d.preemptStep(st, peer)
@@ -195,7 +196,7 @@ func (d *Daemon) autoPromote(reason string, fence bool) {
 		// stay standby, never leave half-configured interfaces up
 		d.ops.mu.Lock()
 		d.ops.cache = IfaceSet{}
-		d.ops.mu.Unlock()
 		d.enforceOnce()
+		d.ops.mu.Unlock()
 	}
 }

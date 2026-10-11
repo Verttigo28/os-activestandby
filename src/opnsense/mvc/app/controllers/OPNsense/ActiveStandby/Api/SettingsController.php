@@ -2,12 +2,22 @@
 
 namespace OPNsense\ActiveStandby\Api;
 
+use OPNsense\Core\Backend;
 use OPNsense\Base\ApiControllerBase;
 use OPNsense\Core\Config;
 use OPNsense\ActiveStandby\ActiveStandby;
 
 class SettingsController extends ApiControllerBase
 {
+    private function audit(string $what): void
+    {
+        $who = preg_replace('/[^A-Za-z0-9._-]/', '', (string)($this->session->get('Username') ?? 'api'));
+        $ip = preg_replace('/[^0-9a-fA-F.:]/', '', (string)$this->request->getClientAddress());
+        $mark = $what . ':by:' . $who . ':from:' . $ip;
+        syslog(LOG_NOTICE, 'activestandby audit ' . $mark);
+        (new Backend())->configdpRun('activestandby ctl_audit', [$mark]);
+    }
+
     public function getAction()
     {
         $result = [];
@@ -41,6 +51,7 @@ class SettingsController extends ApiControllerBase
             }
             $mdl->serializeToConfig();
             Config::getInstance()->save();
+            $this->audit('settings_changed');
             $result['result'] = 'saved';
         }
         return $result;

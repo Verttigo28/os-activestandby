@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -64,9 +66,11 @@ type IfaceSet struct {
 }
 
 type Ops struct {
-	mu    sync.Mutex // serialises promote/demote
-	cache IfaceSet
-	mtime time.Time
+	mu      sync.Mutex // serialises promote/demote
+	cache   IfaceSet
+	mtime   time.Time
+	devHash string         // hash of the device definitions create_devices.php last applied here
+	bg      sync.WaitGroup // background work started by promote (DHCP/DNS restart); demote waits for it
 }
 
 func configPath() string {
@@ -120,6 +124,7 @@ func (d *Daemon) writeStandbyView(full string) error {
 	unlockConfig()
 	defer lockConfig()
 	tmp := configPath() + ".sbv"
+	os.WriteFile(tmp, nil, 0o600) // the helper writes into an existing file, so the standby view is never world-readable
 	if out, err := sh(ifacesScript, "stdview", full, tmp); err != nil {
 		return fmt.Errorf("stdview: %v: %s", err, out)
 	}
@@ -156,6 +161,7 @@ func (d *Daemon) demote(reason string) error { return d.demoteHook(reason, nil) 
 func (d *Daemon) demoteHook(reason string, afterDown func()) error {
 	d.ops.mu.Lock()
 	defer d.ops.mu.Unlock()
+	d.ops.bg.Wait() // a DHCP/DNS restart started by the last promote must not run after we went standby
 	t0 := time.Now()
 	log.Printf("DEMOTE (%s)", reason)
 	st := d.store.Get()
@@ -206,7 +212,7 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) error {
 }
 
 // promote: standby -> active.
-func (d *Daemon) promote(reason string) error {
+func (d *Daemon) promote(reason string) (retErr error) {
 	d.ops.mu.Lock()
 	defer d.ops.mu.Unlock()
 	t0 := time.Now()
@@ -222,6 +228,7 @@ func (d *Daemon) promote(reason string) error {
 	if o, err := sh(mergeScript, full, configPath(), full+".new"); err == nil {
 		syncFile(full + ".new")
 		os.Rename(full+".new", full)
+		os.Chmod(full, 0o600)
 		syncDir(d.store.dir)
 	} else {
 		log.Printf("promote: could not refresh local parts (%v: %s), using active.xml as is", err, o)
@@ -230,32 +237,60 @@ func (d *Daemon) promote(reason string) error {
 	if err := copyFile(full, configPath(), 0o640); err != nil {
 		return err
 	}
+	// from here on a failure must not leave the full config (shared IPs/MACs) on a node that stays standby
+	defer func() {
+		if retErr != nil && d.store.Get().State != StateActive {
+			log.Printf("promote failed (%v): back to the standby view", retErr)
+			if err := d.writeStandbyView(full); err != nil {
+				log.Printf("promote cleanup: %v", err)
+			}
+			d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
+			d.enforceOnce()
+		}
+	}()
 	step(t0, "full config restored")
 	set, err := loadIfaces(full)
 	if err != nil {
 		return err
 	}
-	// virtual devices (VLAN, LAGG, ...) exist only if something created them: do it before bringing interfaces up
-	if len(set.DeviceTypes) > 0 && !virtualDevicesPresent(set) {
-		if out, err := sh(devicesScript); err != nil {
-			log.Printf("promote: creating virtual devices: %v: %s", err, out)
-			d.event("error", "creating the virtual devices (VLAN/LAGG/...) failed: %s", strings.TrimSpace(out))
+	// virtual devices (VLAN, LAGG, ...): they survive on a standby, so the slow device script only runs when the device
+	// definitions changed since it last ran here (or a device is missing)
+	if len(set.DeviceTypes) > 0 {
+		h := devSectionsHash(full)
+		if h == "" || h != d.ops.devHash || !virtualDevicesPresent(set) {
+			if out, err := sh(devicesScript); err != nil {
+				log.Printf("promote: creating virtual devices: %v: %s", err, out)
+				d.event("error", "creating the virtual devices (VLAN/LAGG/...) failed: %s", strings.TrimSpace(out))
+			} else {
+				d.ops.devHash = h
+			}
 		}
 	}
-	step(t0, "virtual devices created")
+	// the standby flushed VLAN parents and LAGG members down too: bring every non-data device back up first
+	dataDev := map[string]bool{}
+	for _, i := range set.Data {
+		dataDev[i.Dev] = true
+	}
+	for _, dev := range set.ForceDown {
+		if !dataDev[dev] {
+			sh("ifconfig", dev, "up")
+		}
+	}
+	step(t0, "virtual devices ready")
 	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 	var firstErr error
-	// each interface costs ~0.6 s of mostly waiting; independent ones are configured at the same time, each in its own
-	// php process. Devices that sit on top of others (VLAN, LAGG, ...) follow once their parents are up.
-	var phys, virt []Iface
+	// each interface costs a fraction of a second of mostly waiting; independent ones are configured at the same time,
+	// each in its own php process, tier by tier so parents are up before what sits on them (LAGG, then VLAN, then the rest)
+	tiers := make([][]Iface, 4)
+	var enabled []Iface
 	for _, i := range set.Data {
-		if virtualDev.MatchString(i.Dev) {
-			virt = append(virt, i)
-		} else {
-			phys = append(phys, i)
+		if !i.Enabled {
+			continue // assigned but disabled in the config: stays down on the active node too
 		}
+		enabled = append(enabled, i)
+		tiers[devTier(i)] = append(tiers[devTier(i)], i)
 	}
-	for _, group := range [][]Iface{phys, virt} {
+	for _, group := range tiers {
 		var rw sync.WaitGroup
 		var emu sync.Mutex
 		for _, i := range group {
@@ -285,23 +320,24 @@ func (d *Daemon) promote(reason string) error {
 	}
 	if d.cfg.ForcePromisc {
 		// some virtual NIC drivers keep their hardware receive filter when the lladdr changes
-		for _, i := range set.Data {
+		for _, i := range enabled {
 			sh("ifconfig", i.Dev, "promisc")
 		}
 	}
-	// a config without <enable> "reconfigures" fine but leaves the device down: verify, never assume
+	// a config without <enable> "reconfigures" fine but leaves the device down: verify, never assume. Devices created
+	// later by a daemon (PPPoE & co.) are exempt.
 	up, _ := sh("ifconfig", "-l", "-u")
 	upSet := map[string]bool{}
 	for _, n := range strings.Fields(up) {
 		upSet[n] = true
 	}
-	for _, i := range set.Data {
-		if !upSet[i.Dev] {
+	for _, i := range enabled {
+		if !upSet[i.Dev] && !asyncDev.MatchString(i.Dev) {
 			return fmt.Errorf("interface %s (%s) did not come up after reconfigure; is it enabled in the config?", i.Key, i.Dev)
 		}
 	}
 	// gratuitous ARP first, right after the links are up so the switch and neighbours relearn the port
-	for _, i := range set.Data {
+	for _, i := range enabled {
 		announce(i.Dev)
 	}
 	step(t0, "gratuitous ARP sent")
@@ -320,9 +356,12 @@ func (d *Daemon) promote(reason string) error {
 	for _, c := range haStart {
 		run(c...)
 	}
-	// DHCP and DNS services restart once (not once per interface) and re-read the lease files replicated from the old active node
 	wg.Wait()
-	go func() { // nothing waits for these: traffic already flows
+	// DHCP and DNS restart once (not once per interface) and re-read the lease files replicated from the old active node.
+	// Nothing waits for it (traffic already flows), but a demote does, so it cannot restart them after the node went standby.
+	d.ops.bg.Add(1)
+	go func() {
+		defer d.ops.bg.Done()
 		t1 := time.Now()
 		out, err := sh(reconfScript, "dns")
 		log.Printf("  dhcp+dns restart: %dms err=%v out=%q", time.Since(t1).Milliseconds(), err, out)
@@ -341,6 +380,7 @@ func (d *Daemon) promote(reason string) error {
 	d.hist.add(HistoryEntry{Type: "promote", Reason: reason, DurationMs: time.Since(t0).Milliseconds(), Epoch: d.store.Get().Epoch})
 	d.leases.reset()
 	d.drift.reason.Store("")
+	d.health.startGrace()
 	step(t0, "ACTIVE")
 	return err
 }
@@ -366,6 +406,7 @@ func bootStandby() error {
 	if err := d.writeStandbyView(full); err != nil {
 		return err
 	}
+	writeRoleMarker(State{PeerFP: s.PeerFP, State: StateStandby})
 	return st.Update(func(x *State) { x.State = StateStandby })
 }
 
@@ -377,6 +418,7 @@ func (d *Daemon) enforceLoop() {
 		if tick%60 == 1 {
 			hardenFiles(d.store.dir)
 		}
+		writeRoleMarker(d.store.Get())
 		d.ensureConfigLock()
 		if d.store.Get().State != StateStandby {
 			continue
@@ -388,6 +430,9 @@ func (d *Daemon) enforceLoop() {
 		d.enforceOnce()
 		if tick%5 == 0 {
 			d.enforceServices()
+		}
+		if tick%10 == 3 {
+			d.prepareDevices()
 		}
 		d.ops.mu.Unlock()
 	}
@@ -520,7 +565,38 @@ func bootGuard() error {
 	return nil
 }
 
-var virtualDev = regexp.MustCompile(`^(vlan|lagg|bridge|gre|gif|epair|vxlan|qinq|tap|tun|ovpn|wg)[0-9]`)
+var (
+	virtualDev = regexp.MustCompile(`^(vlan|lagg|bridge|gre|gif|epair|vxlan|qinq|tap|tun|ovpn|wg)[0-9]`)
+	asyncDev   = regexp.MustCompile(`^(pppoe|pptp|l2tp|ppp)[0-9]`) // created by mpd5 once the session is up
+	devSection = regexp.MustCompile(`(?s)<(vlans|laggs|bridges|gres|gifs|qinqs)>.*?</(vlans|laggs|bridges|gres|gifs|qinqs)>`)
+)
+
+// devTier orders interface bring-up: plain NICs, then LAGGs, then VLANs (they may sit on a LAGG), then the rest
+// (bridges, tunnels: they may sit on VLANs).
+func devTier(i Iface) int {
+	switch {
+	case !i.Virtual && !virtualDev.MatchString(i.Dev):
+		return 0
+	case strings.HasPrefix(i.Dev, "lagg"):
+		return 1
+	case strings.HasPrefix(i.Dev, "vlan"), strings.HasPrefix(i.Dev, "qinq"), strings.Contains(i.Dev, "_vlan"), strings.Contains(i.Dev, "."):
+		return 2
+	}
+	return 3
+}
+
+// devSectionsHash fingerprints the device definitions (VLAN, LAGG, bridge, tunnel sections) of a config file.
+func devSectionsHash(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	h := sha256.New()
+	for _, m := range devSection.FindAll(b, -1) {
+		h.Write(m)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 // virtualDevicesPresent: the devices survive on a standby (they are only taken down), so the slow device script is skipped
 // when every virtual device of the data interfaces still exists.
@@ -539,4 +615,26 @@ func virtualDevicesPresent(set IfaceSet) bool {
 		}
 	}
 	return true
+}
+
+// prepareDevices keeps the VLAN/LAGG/... devices of a standby in line with the replicated config, so a promote does not
+// have to run the slow device script. Whatever the script brings up is taken down again right away. Caller holds ops.mu.
+func (d *Daemon) prepareDevices() {
+	full := activeXML(d.store.dir)
+	h := devSectionsHash(full)
+	if h == "" || h == d.ops.devHash {
+		return
+	}
+	set, err := d.ops.ifaces(full)
+	if err != nil || len(set.DeviceTypes) == 0 {
+		d.ops.devHash = h
+		return
+	}
+	if out, err := sh(devicesScript); err != nil {
+		log.Printf("standby: preparing virtual devices: %v: %s", err, out)
+		return
+	}
+	d.enforceOnce()
+	d.ops.devHash = h
+	log.Printf("standby: virtual devices prepared for a fast takeover")
 }

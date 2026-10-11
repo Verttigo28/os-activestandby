@@ -37,7 +37,7 @@ type Kit struct {
 func (p *Pairing) StartWith(token string, expires time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.s = &pairSession{token: normToken(token), expires: expires, hellos: map[string]helloState{}}
+	p.s = &pairSession{token: normToken(token), expires: expires, hellos: map[string]helloState{}, helloFails: map[string]int{}, blocked: map[string]time.Time{}}
 }
 
 // startKitPairing runs on a secondary that was configured from a kit.
@@ -55,7 +55,7 @@ func (d *Daemon) startKitPairing() {
 
 func (d *Daemon) registerKit(mux *http.ServeMux) {
 	mux.HandleFunc("/audit", func(w http.ResponseWriter, r *http.Request) {
-		msg := regexp.MustCompile(`[^A-Za-z0-9._:1776 1776]`).ReplaceAllString(r.URL.Query().Get("msg"), "")
+		msg := regexp.MustCompile(`[^A-Za-z0-9._:@-]`).ReplaceAllString(r.URL.Query().Get("msg"), "")
 		d.event("info", "AUDIT %s", msg)
 		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})
@@ -99,7 +99,7 @@ func (d *Daemon) ctlKit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// pin the live MACs first: the secondary has to come up with exactly these
-	exec.Command(spoofScript).Run()
+	d.pinMACs()
 	token, err := newToken()
 	if err != nil {
 		fail(err.Error())
@@ -155,7 +155,7 @@ func (d *Daemon) kitLoop() {
 			}
 			continue
 		}
-		exec.Command(spoofScript).Run()
+		d.pinMACs()
 		d.store.Update(func(s *State) { s.Kit = nil })
 		d.event("change", "the second firewall came up and was paired automatically")
 	}

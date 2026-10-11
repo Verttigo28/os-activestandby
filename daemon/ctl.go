@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -169,10 +168,8 @@ func (d *Daemon) ctlPair(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"status": "paired", "peer_hostname": res.Peer.Hostname, "peer_fp": res.FP}
 	// Master: pin the live MAC of every data interface into config.xml (spoofmac) so the config we
 	// replicate makes the standby come up with identical MACs. A no-op for the running master.
-	if b, err := exec.Command(spoofScript).CombinedOutput(); err != nil {
-		out["warning"] = fmt.Sprintf("paired, but writing spoofmac failed: %v: %s", err, strings.TrimSpace(string(b)))
-	} else {
-		out["spoofmac"] = strings.TrimSpace(string(b))
+	if d.pinMACs() {
+		out["spoofmac"] = "a shared MAC address was set on the data interfaces"
 	}
 	writeJSON(w, 200, out)
 }
