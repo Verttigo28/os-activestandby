@@ -55,7 +55,7 @@ gh attestation verify os-activestandby-<version>.pkg --repo Verttigo28/opn-bette
 **2. A signed pkg repository (once the key exists).** `pkg` signs a repository catalog, not single files. CI builds the repository with your private key and publishes it on the `gh-pages` branch; clients then use `pkg install`/`pkg upgrade` with signature checking.
 
 One-time setup by the maintainer:
-1. `sh build/gen-signing-key.sh` creates `repo.key` (private) and `keys/activestandby.pub` (public) and prints the key fingerprint. Commit `keys/activestandby.pub`, never `repo.key`.
+1. On Windows run `.buildgen-signing-key.ps1` in PowerShell (it uses the openssl that ships with Git for Windows); elsewhere `sh build/gen-signing-key.sh`. Either creates `repo.key` (private) and `keys/activestandby.pub` (public) and prints the key fingerprint. On Windows, `Get-Content repo.key -Raw | Set-Clipboard` copies the private key for the secret. Commit `keys/activestandby.pub`, never `repo.key`.
 2. GitHub, repository **Settings > Secrets and variables > Actions > New repository secret**: name `PKG_SIGNING_KEY`, value the complete content of `repo.key` including the `-----BEGIN` and `-----END` lines. Store `repo.key` in a password manager or delete it from the workstation.
 3. GitHub, **Settings > Pages**: source *Deploy from a branch*, branch `gh-pages`, folder `/ (root)`. The branch appears after the first tagged build with the secret set.
 4. Publish the key fingerprint in the README so users can compare it.
