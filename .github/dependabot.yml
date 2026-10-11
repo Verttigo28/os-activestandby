@@ -3,6 +3,9 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: monthly }
+    groups:
+      actions:
+        patterns: ["*"] # one pull request for all action bumps, tested together
   - package-ecosystem: gomod
     directory: /daemon
     schedule: { interval: monthly }
