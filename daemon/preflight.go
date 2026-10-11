@@ -67,6 +67,12 @@ func (d *Daemon) localChecks() []Check {
 	if st.PeerFP == "" {
 		return []Check{fail("pairing", "this node is not paired")}
 	}
+	switch d.mgmtProbe() {
+	case "ok":
+		cs = append(cs, pass("management probe", "this node reaches its management probe targets"))
+	case "fail":
+		cs = append(cs, warn("management probe", "this node cannot reach its management probe targets (a standby in this state will not take over)"))
+	}
 	alive, ago, peer := d.hb.Snapshot()
 	if d.hb.PathAlive("ha") {
 		rtt := d.hb.RTT("ha")

@@ -95,7 +95,7 @@ func (d *Daemon) ctlStatus(w http.ResponseWriter, r *http.Request) {
 	st := d.store.Get()
 	active, exp := d.pairing.Active()
 	out := map[string]any{
-		"hostname": hostName(), "daemon": "up", "version": version, "role": st.Role, "epoch": st.Epoch,
+		"hostname": hostName(), "mgmt_probe": d.mgmtProbe(), "daemon": "up", "version": version, "role": st.Role, "epoch": st.Epoch,
 		"peer_addr": st.PeerAddr, "peer_fp": st.PeerFP, "paired_at": st.PairedAt,
 		"local_fp": d.fp, "ha_address": d.haAddr, "listen_port": d.cfg.ListenPort,
 		"pairing_open": active, "state": st.State, "state_lost": st.Corrupt, "proxy_port": proxyPort(d.cfg), "auto_failover": d.cfg.autoOn(), "auto_blocked": d.auto.Blocked(),
@@ -113,6 +113,7 @@ func (d *Daemon) ctlStatus(w http.ResponseWriter, r *http.Request) {
 	if st.PeerFP != "" {
 		out["peer_alive"], out["peer_state"], out["peer_epoch"] = alive, peer.State, peer.Epoch
 		out["peer_hostname"] = peer.Host
+		out["peer_mgmt_probe"] = peer.MgmtProbe
 		out["peer_last_hb_ms"] = ago.Milliseconds()
 		out["paths"] = map[string]bool{"ha": d.hb.PathAlive("ha"), "mgmt": d.hb.PathAlive("mgmt")}
 		pv, mism := d.versionInfo()

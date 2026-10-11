@@ -28,7 +28,7 @@ The daemon is Go, standard library only, one static binary. The GUI never talks 
 
 ## Failure detection
 
-Heartbeats go out several times per detection period (default 2 s, configurable 1-30) on the HA link and, if configured, the management network. A peer counts as dead only after silence on **every** path. Before a standby promotes itself it must prove it is not the isolated node: its management carrier is up, or, with the HA link only, its own HA carrier is up. Otherwise promotion is held back and an operator decides.
+Heartbeats go out several times per detection period (default 2 s, configurable 1-30) on the HA link and, if configured, the management network. A peer counts as dead only after silence on **every** path. Before a standby promotes itself it must prove it is not the isolated node: its management carrier is up (and, if management probe targets are configured, it reaches them), or, with the HA link only, its own HA carrier is up. Otherwise promotion is held back and an operator decides.
 
 If the peer went silent and a fencing command is configured, that command must succeed first. It runs as a root-owned absolute path without a shell, and a failure blocks the promotion.
 

@@ -14,6 +14,7 @@
   "monitor_interfaces": "{{ g.monitor_interfaces|default("") }}",
   "health_services": {{ "true" if g.health_services|default("0") == "1" else "false" }},
   "detect_time": {{ g.detect_time|default("2") }},
+  "mgmt_probe_targets": "{{ g.mgmt_probe_targets|default("") }}",
   "sync_sessions": {{ "true" if g.sync_sessions|default("1") == "1" else "false" }},
   "probe_targets": "{{ g.probe_targets|default("") }}",
   "health_hold": {{ g.health_hold|default("6") }},

@@ -48,6 +48,7 @@ Settings tab (some under *advanced*):
 
 - **Preemption**: the primary takes the active role back after a delay, using the normal graceful failover with its guard. Off by default.
 - **Health monitoring**: carrier of chosen interfaces (confirmed by the standby's link before switching), packet filter and IPsec services (restarted first), **probe targets** (the active node pings addresses you choose; a switch happens only if none answers). A hold time applies, no switching for 30 s after a promote, at most two health switches per 30 minutes and a 5-minute cool-down.
+- **Management probe targets**: optional addresses (the management switch or router) that both nodes ping from their management address. They give the standby, whose data interfaces are down, proof that its own network side is alive: a standby that cannot reach them does not take over, and an active node does not hand over for a health problem when the standby cannot either. Use addresses that answer ping.
 - **Failure detection time**: lower is faster and riskier on a flaky link. Same value on both nodes.
 - **Fencing command**: a root-owned absolute path run before an automatic promotion when the peer went silent. Failure blocks the promotion.
 - **GUI logins across a failover** and **virtual MAC** are on by default.

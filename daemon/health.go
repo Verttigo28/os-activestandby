@@ -29,6 +29,8 @@ type healthState struct {
 	devPath     string
 	devMtime    time.Time
 	devSet      IfaceSet
+	mgmtBad     int    // consecutive failed management probes
+	mgmtMsg     string // last failure message
 }
 
 func newHealthState() *healthState {
@@ -105,6 +107,7 @@ func (d *Daemon) healthStep() {
 	h.mu.Lock()
 	h.links = links
 	h.mu.Unlock()
+	d.mgmtProbeStep()
 
 	h.mu.Lock()
 	inGrace := time.Now().Before(h.graceUntil)
@@ -176,6 +179,10 @@ func (d *Daemon) healthSwitch(due []string, failures map[string]string) {
 			h.warned[id] = true
 			go d.event("warning", "%s", msg)
 		}
+	}
+	if alive && peer.MgmtProbe == "fail" {
+		warn("peerprobe", "health problem persists but the standby cannot reach its management probe targets either: staying active (the outage would only move)")
+		return
 	}
 	if !alive || peer.State != StateStandby || peer.Health != "" {
 		warn("peer", "health problem persists but the standby cannot take over (not reachable, not standby or unhealthy): staying active")
@@ -251,9 +258,13 @@ func (d *Daemon) checkServices(failures map[string]string) {
 
 // probeFailed pings the configured probe targets (e.g. the upstream router) from the active node, all at once. Only when
 // none of them answers does it report a failure, so one flaky target never triggers anything.
-func (d *Daemon) probeFailed() string {
+func (d *Daemon) probeFailed() string { return d.pingAny(d.cfg.ProbeTargets, "") }
+
+// pingAny pings the comma separated IPv4 targets (from the given source address, if any) all at once and returns a
+// message when none answers, "" when at least one does or nothing is configured.
+func (d *Daemon) pingAny(list, src string) string {
 	var targets []string
-	for _, t := range strings.Split(d.cfg.ProbeTargets, ",") {
+	for _, t := range strings.Split(list, ",") {
 		if ip := net.ParseIP(strings.TrimSpace(t)); ip != nil && ip.To4() != nil {
 			targets = append(targets, ip.String())
 		}
@@ -268,7 +279,11 @@ func (d *Daemon) probeFailed() string {
 		wg.Add(1)
 		go func(t string) {
 			defer wg.Done()
-			if _, err := sh("ping", "-c", "1", "-t", "1", t); err == nil {
+			args := []string{"-c", "1", "-t", "1"}
+			if src != "" {
+				args = append(args, "-S", src)
+			}
+			if _, err := sh("ping", append(args, t)...); err == nil {
 				mu.Lock()
 				up++
 				mu.Unlock()
@@ -277,7 +292,7 @@ func (d *Daemon) probeFailed() string {
 	}
 	wg.Wait()
 	if up == 0 {
-		return "none of the probe targets answers (" + strings.Join(targets, ", ") + ")"
+		return "none of the targets answers (" + strings.Join(targets, ", ") + ")"
 	}
 	return ""
 }
@@ -288,4 +303,48 @@ func (h *healthState) startGrace() {
 	h.mu.Lock()
 	h.graceUntil = time.Now().Add(30 * time.Second)
 	h.mu.Unlock()
+}
+
+// Management probe (both nodes): the optional "management probe targets" (typically the management switch or router) are
+// pinged from the management address. On the standby, whose data interfaces are down, this is the only way to learn
+// that its own network side is alive: a standby that cannot reach them must not take over, and an active node that
+// wants to hand over because of a health problem first checks that the standby can.
+
+// mgmtProbeStep runs every health tick; two consecutive failures flip the state to "fail".
+func (d *Daemon) mgmtProbeStep() {
+	if d.cfg.MgmtProbeTargets == "" || d.mgmtAddr() == "" {
+		d.health.mu.Lock()
+		d.health.mgmtBad, d.health.mgmtMsg = 0, ""
+		d.health.mu.Unlock()
+		return
+	}
+	msg := d.pingAny(d.cfg.MgmtProbeTargets, d.mgmtAddr())
+	h := d.health
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if msg == "" {
+		if h.mgmtBad >= 2 {
+			go d.event("info", "management probe recovered")
+		}
+		h.mgmtBad, h.mgmtMsg = 0, ""
+		return
+	}
+	h.mgmtBad++
+	if h.mgmtBad == 2 {
+		go d.event("warning", "management probe failed on this node: %s", msg)
+	}
+	h.mgmtMsg = msg
+}
+
+// mgmtProbe is "" (not configured), "ok" or "fail"; it goes into the heartbeat.
+func (d *Daemon) mgmtProbe() string {
+	if d.cfg.MgmtProbeTargets == "" || d.mgmtAddr() == "" {
+		return ""
+	}
+	d.health.mu.Lock()
+	defer d.health.mu.Unlock()
+	if d.health.mgmtBad >= 2 {
+		return "fail"
+	}
+	return "ok"
 }

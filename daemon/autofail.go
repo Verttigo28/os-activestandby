@@ -155,7 +155,7 @@ func (d *Daemon) autoStep() {
 		if d.hb.silentFor() < need {
 			return
 		}
-		mgmtOK := d.mgmtAddr() != "" && carrierUp(d.cfg.MgmtDevice)
+		mgmtOK := d.mgmtAddr() != "" && carrierUp(d.cfg.MgmtDevice) && d.mgmtProbe() != "fail"
 		haOK := carrierUp(d.cfg.HADevice)
 		switch {
 		case mgmtOK:
@@ -169,7 +169,7 @@ func (d *Daemon) autoStep() {
 				d.event("warning", "peer silent but automatic promotion held back: this node cannot prove it is not isolated")
 			}
 			d.auto.setBlocked("peer is silent, but this node cannot prove it is not the isolated one " +
-				"(HA/management carrier down). Promote manually if the peer is really down.")
+				"(HA/management carrier or management probe down). Promote manually if the peer is really down.")
 			return
 		}
 		d.autoPromote("peer lost on all heartbeat paths", true)

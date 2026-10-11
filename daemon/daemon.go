@@ -16,7 +16,7 @@ import (
 )
 
 // version is set at build time (-ldflags "-X main.version=...") by CI and build/build.ps1.
-var version = "0.5.2"
+var version = "0.5.3"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`
@@ -26,19 +26,20 @@ type Config struct {
 	AllowHAOnly  bool   `json:"allow_ha_only_promote"`
 	ForcePromisc bool   `json:"force_promisc"`
 
-	NotifyLevel    string `json:"notify_level"`
-	NotifyWebhook  string `json:"notify_webhook"`
-	FenceCommand   string `json:"fence_command"`
-	Preempt        bool   `json:"preempt"`
-	PreemptDelay   int    `json:"preempt_delay"`
-	MonitorIfaces  string `json:"monitor_interfaces"`
-	HealthServices bool   `json:"health_services"`
-	HealthHold     int    `json:"health_hold"`
-	PairToken      string `json:"pair_token"`    // secondary kit: pairing token prepared on the primary
-	DetectTime     int    `json:"detect_time"`   // seconds of heartbeat silence before the peer counts as dead
-	ProbeTargets   string `json:"probe_targets"` // comma separated IPv4 addresses the active node must be able to ping
-	SyncSessions   *bool  `json:"sync_sessions"` // replicate GUI logins to the standby (default on)
-	PairExpires    string `json:"pair_expires"`  // ... and its deadline
+	NotifyLevel      string `json:"notify_level"`
+	NotifyWebhook    string `json:"notify_webhook"`
+	FenceCommand     string `json:"fence_command"`
+	Preempt          bool   `json:"preempt"`
+	PreemptDelay     int    `json:"preempt_delay"`
+	MonitorIfaces    string `json:"monitor_interfaces"`
+	HealthServices   bool   `json:"health_services"`
+	HealthHold       int    `json:"health_hold"`
+	PairToken        string `json:"pair_token"`         // secondary kit: pairing token prepared on the primary
+	DetectTime       int    `json:"detect_time"`        // seconds of heartbeat silence before the peer counts as dead
+	ProbeTargets     string `json:"probe_targets"`      // comma separated IPv4 addresses the active node must be able to ping
+	MgmtProbeTargets string `json:"mgmt_probe_targets"` // pinged from the management address on both nodes (e.g. the management switch)
+	SyncSessions     *bool  `json:"sync_sessions"`      // replicate GUI logins to the standby (default on)
+	PairExpires      string `json:"pair_expires"`       // ... and its deadline
 }
 
 func (c Config) autoOn() bool       { return c.AutoFailover == nil || *c.AutoFailover }

@@ -129,6 +129,7 @@
                 let rows = [
                     ['{{ lang._('This firewall') }}', (s.hostname || '-') + ' (' + (s.state || '-') + ', ' + (s.role === 'master' ? '{{ lang._('primary') }}' : (s.role === 'standby' ? '{{ lang._('secondary') }}' : s.role)) + ')'],
                     ['{{ lang._('Other firewall') }}', s.peer_addr ? (s.peer_hostname || '-') + ' (' + (s.peer_state || '-') + ')' : '-'],
+                    ['{{ lang._('Management probe') }}', s.mgmt_probe ? (s.mgmt_probe === 'ok' ? '{{ lang._('this firewall reaches the probe targets') }}' : '{{ lang._('this firewall CANNOT reach the probe targets') }}') + (s.peer_mgmt_probe ? ' / ' + '{{ lang._('other firewall') }}: ' + s.peer_mgmt_probe : '') : '-'],
                     ['{{ lang._('Daemon') }}', s.daemon || (s.error ? 'error' : '')],
                     ['{{ lang._('Role') }}', s.role],
                     ['{{ lang._('State') }}', s.state ? (s.state + (s.peer_state ? ' (peer: ' + s.peer_state + ')' : '')) : '-'],

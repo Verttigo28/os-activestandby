@@ -67,6 +67,12 @@
         <help>Copies the web GUI sessions of the active node to the standby, so you stay logged in after a failover. Sessions are only sent over the pinned HA connection and removed on the standby when you log out. Turn off if you do not want session data to leave the active node.</help>
     </field>
     <field>
+        <id>activestandby.general.mgmt_probe_targets</id>
+        <label>Management probe targets</label>
+        <type>text</type>
+        <help>Optional. IPv4 addresses on the management network (the management switch or router) that BOTH nodes ping from their management address every 2 seconds. A standby that cannot reach them will not take over (it may be the isolated one), and an active node will not hand over because of a health problem when the standby cannot reach them either. Needs a management interface. Use addresses that answer ping.</help>
+    </field>
+    <field>
         <id>activestandby.general.detect_time</id>
         <label>Failure detection time (seconds)</label>
         <type>text</type>
