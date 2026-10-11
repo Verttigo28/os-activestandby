@@ -57,7 +57,7 @@ class WizardController extends ApiControllerBase
         return $out;
     }
 
-$1: string[], warnings: string[], has_ha_rule: bool} */
+    /** @return array{errors: string[], warnings: string[], has_ha_rule: bool} */
     public function precheckAction()
     {
         $ha = preg_replace('/[^a-z0-9_]/i', '', (string)$this->request->get('ha'));
