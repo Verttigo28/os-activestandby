@@ -40,7 +40,7 @@ export default class ActiveStandby extends BaseTableWidget {
         const stateBadge = this.badge(active ? t.active : t.standby, active ? 'green' : '#6c757d');
         const role = s.role === 'master' ? 'primary' : 'secondary';
 
-        let peer = s.peer_state ? this.badge(s.peer_state === 'active' ? t.active : t.standby, s.peer_state === 'active' ? 'green' : '#6c757d') : '-';
+        let peer = s.peer_state ? `<b>${this.esc(s.peer_hostname || "")}</b> ` + this.badge(s.peer_state === 'active' ? t.active : t.standby, s.peer_state === 'active' ? 'green' : '#6c757d') : '-';
         peer += ' ' + this.esc(s.peer_addr || '') + ' ' + (s.peer_alive ? t.reachable : `<b style="color:#c00">${t.unreachable}</b>`);
 
         const p = s.paths || {};
@@ -62,7 +62,7 @@ export default class ActiveStandby extends BaseTableWidget {
         }
 
         const rows = [
-            [t.thisnode, `${stateBadge} (${role}) ${this.esc(s.ha_address || '')}`],
+            [t.thisnode, `<b>${this.esc(s.hostname || "")}</b> ${stateBadge} (${role}) ${this.esc(s.ha_address || "")}`],
             [t.peer, peer],
             [t.links, links],
             [t.sync, sync],

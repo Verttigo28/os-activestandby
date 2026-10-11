@@ -48,15 +48,18 @@
                 return;
             }
             const role = s.role === 'master' ? '{{ lang._('primary') }}' : '{{ lang._('secondary') }}';
+            const peerRole = s.role === 'master' ? '{{ lang._('secondary') }}' : '{{ lang._('primary') }}';
+            const me = s.hostname || '{{ lang._('this firewall') }}';
             if (s.state === 'active') {
-                setTile('tRole', 'ok', '{{ lang._('ACTIVE') }}', '{{ lang._('Handles all traffic') }} · ' + role);
+                setTile('tRole', 'ok', me, '{{ lang._('ACTIVE') }} · {{ lang._('handles all traffic') }} · ' + role);
             } else {
-                setTile('tRole', 'idle', '{{ lang._('STANDBY') }}', '{{ lang._('Waiting as backup') }} · ' + role);
+                setTile('tRole', 'idle', me, '{{ lang._('STANDBY') }} · {{ lang._('waiting as backup') }} · ' + role);
             }
+            const other = s.peer_hostname || s.peer_addr || '{{ lang._('other firewall') }}';
             if (s.peer_alive) {
-                setTile('tPeer', 'ok', s.peer_state === 'active' ? '{{ lang._('ACTIVE') }}' : '{{ lang._('STANDBY') }}', (s.peer_addr || '') + ' · ' + (s.peer_last_hb_ms !== undefined ? s.peer_last_hb_ms + ' ms ago' : ''));
+                setTile('tPeer', 'ok', other, (s.peer_state === 'active' ? '{{ lang._('ACTIVE') }}' : '{{ lang._('STANDBY') }}') + ' · ' + peerRole + ' · ' + (s.peer_addr || ''));
             } else {
-                setTile('tPeer', 'bad', '{{ lang._('NOT RESPONDING') }}', s.peer_addr || '');
+                setTile('tPeer', 'bad', other, '{{ lang._('NOT RESPONDING') }} · ' + peerRole + ' · ' + (s.peer_addr || ''));
             }
             const y = s.sync || {};
             if (y.state === 'in_sync') { setTile('tSync', 'ok', '{{ lang._('In sync') }}', '{{ lang._('revision') }} ' + y.rev); }
@@ -92,9 +95,17 @@
         $('#bannerKitStop').click(function (e) { e.preventDefault(); ajaxCall('/api/activestandby/pairing/kitcancel', {}, function () { refreshStatus(); }); });
         $('#toggleSbEvents').click(function (e) { e.preventDefault(); $('#sbEvents').toggle(); });
 
+        let seenWho = null;
         function refreshStatus() {
             ajaxGet('/api/activestandby/pairing/status', {}, function (s) {
+                // The shared address is now answered by the other firewall (failover) or this one changed role: reload,
+                // so the page, its menus and its buttons belong to the node that is serving them.
+                const who = (s.hostname || '') + '|' + (s.state || '') + '|' + (s.role || '');
+                if (seenWho !== null && who !== seenWho && s.daemon === 'up') { location.reload(); return; }
+                seenWho = who;
                 let rows = [
+                    ['{{ lang._('This firewall') }}', (s.hostname || '-') + ' (' + (s.state || '-') + ', ' + (s.role === 'master' ? '{{ lang._('primary') }}' : (s.role === 'standby' ? '{{ lang._('secondary') }}' : s.role)) + ')'],
+                    ['{{ lang._('Other firewall') }}', s.peer_addr ? (s.peer_hostname || '-') + ' (' + (s.peer_state || '-') + ')' : '-'],
                     ['{{ lang._('Daemon') }}', s.daemon || (s.error ? 'error' : '')],
                     ['{{ lang._('Role') }}', s.role],
                     ['{{ lang._('State') }}', s.state ? (s.state + (s.peer_state ? ' (peer: ' + s.peer_state + ')' : '')) : '-'],

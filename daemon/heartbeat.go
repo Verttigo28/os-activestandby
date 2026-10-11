@@ -49,6 +49,7 @@ type hbMsg struct {
 	Applied string          `json:"applied,omitempty"` // hash of the last config revision the sender (standby) applied
 
 	Busy       bool   `json:"busy,omitempty"`        // sender is in the middle of a promote/demote: the peer must not elect itself meanwhile
+	Host       string `json:"host,omitempty"`        // sender hostname, shown in the GUI so both firewalls can be told apart
 	Maint      bool   `json:"maint,omitempty"`       // maintenance mode as the sender knows it ...
 	MaintUntil string `json:"maint_until,omitempty"` // ... its deadline ...
 	MaintAt    string `json:"maint_at,omitempty"`    // ... and when it last changed (the newest change wins on both nodes)
@@ -133,7 +134,7 @@ func (d *Daemon) localHB() hbMsg {
 		Resync:  st.State == StateStandby && st.PeerFP != "" && (!activeValid(d.store.dir) || d.driftDetected()),
 		Links:   d.health.snapshotLinks(),
 		Health:  d.healthReason(),
-		Applied: st.AppliedSHA, Busy: d.opsBusy(), Maint: st.Maintenance, MaintUntil: st.MaintenanceUntil, MaintAt: st.MaintAt}
+		Applied: st.AppliedSHA, Busy: d.opsBusy(), Host: hostName(), Maint: st.Maintenance, MaintUntil: st.MaintenanceUntil, MaintAt: st.MaintAt}
 }
 
 func (d *Daemon) handleHB(w http.ResponseWriter, r *http.Request) {

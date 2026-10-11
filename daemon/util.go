@@ -84,3 +84,9 @@ func (a *atomicTime) Get() time.Time {
 	}
 	return time.Unix(0, n)
 }
+
+// hostName is this node's name as the GUI shows it.
+func hostName() string {
+	h, _ := os.Hostname()
+	return h
+}
