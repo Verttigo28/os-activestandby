@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,7 +17,7 @@ import (
 )
 
 // version is set at build time (-ldflags "-X main.version=...") by CI and build/build.ps1.
-var version = "0.5.5"
+var version = "0.5.6"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`
@@ -56,10 +57,12 @@ type Daemon struct {
 	sync          *syncCtl
 	ev            *Events
 	lastClockSet  atomicTime
+	lastClockWarn atomicTime
 	unlockedUntil atomicTime
 	localVer      string
 	verMu         sync.Mutex
 	failMu        sync.Mutex // one switchover at a time
+	pkgMu         sync.Mutex // one package installation at a time
 	sess          *sessionSync
 	peerVer       string
 	verMismatch   bool
@@ -80,10 +83,21 @@ func loadConfig() Config {
 		path = "/usr/local/etc/hasyncd.json"
 	}
 	if b, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(b, &c)
+		os.Chmod(path, 0o600) // webhook URL and kit token live here
+		if err := json.Unmarshal(b, &c); err != nil {
+			// never run silently on half a configuration
+			log.Printf("ERROR: %s is not valid JSON (%v): using defaults for what could not be read; fix the plugin settings", path, err)
+		}
 	}
-	if c.ListenPort == 0 {
+	if c.ListenPort < 1024 || c.ListenPort > 65535 {
 		c.ListenPort = 7690
+	}
+	// device names end up as arguments of ifconfig and friends: only plain names
+	for _, dev := range []*string{&c.HADevice, &c.MgmtDevice} {
+		if *dev != "" && !devNameRe.MatchString(*dev) {
+			log.Printf("ERROR: ignoring invalid device name %q in the daemon configuration", *dev)
+			*dev = ""
+		}
 	}
 	return c
 }
@@ -172,7 +186,11 @@ func runDaemon() error {
 		d.recordIntegrity()
 	}
 	log.Printf("hasyncd %s listening on %s (fp %s, role %s)", version, listen, d.fp[:16], st.Get().Role)
-	return srv.ListenAndServeTLS("", "")
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		return err
+	}
+	return srv.ServeTLS(d.guard(ln), "", "")
 }
 
 func (d *Daemon) peerMux() *http.ServeMux {
@@ -285,8 +303,14 @@ func (d *Daemon) mgmtListener() {
 		srv := &http.Server{Addr: net.JoinHostPort(ip, fmt.Sprint(d.cfg.ListenPort)), Handler: d.peerMux(),
 			TLSConfig: d.peerTLS(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second}
 		log.Printf("secondary heartbeat path listening on %s", srv.Addr)
-		log.Printf("mgmt listener ended: %v", srv.ListenAndServeTLS("", ""))
+		if ln, lerr := net.Listen("tcp", srv.Addr); lerr != nil {
+			log.Printf("mgmt listener: %v", lerr)
+		} else {
+			log.Printf("mgmt listener ended: %v", srv.ServeTLS(d.guard(ln), "", ""))
+		}
 		d.mgmtIP.Store("")
 		time.Sleep(5 * time.Second)
 	}
 }
+
+var devNameRe = regexp.MustCompile(`^[a-z][a-z0-9_.]{0,30}$`)

@@ -37,6 +37,8 @@ func decodePackages(s string) (map[string]string, error) {
 
 // ensurePackages makes the standby's package set cover the active node's.
 func (d *Daemon) ensurePackages(want map[string]string) error {
+	d.pkgMu.Lock() // one install at a time, whatever the peer sends
+	defer d.pkgMu.Unlock()
 	if len(want) == 0 {
 		return nil
 	}

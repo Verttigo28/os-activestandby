@@ -1,23 +1,24 @@
 {% set g = OPNsense.ActiveStandby.general if helpers.exists('OPNsense.ActiveStandby.general') else {} %}
+{#- every value is rendered through tojson/int: a setting can never break out of its JSON string or corrupt the file -#}
 {
-  "listen_port": {{ g.listen_port|default("7690") }},
-  "ha_device": "{% if g.ha_interface|default("") %}{{ helpers.physical_interface(g.ha_interface) }}{% endif %}",
-  "mgmt_device": "{% if g.mgmt_interface|default("") %}{{ helpers.physical_interface(g.mgmt_interface) }}{% endif %}",
+  "listen_port": {{ g.listen_port|default("7690")|int }},
+  "ha_device": {{ (helpers.physical_interface(g.ha_interface) if g.ha_interface|default("") else "")|tojson }},
+  "mgmt_device": {{ (helpers.physical_interface(g.mgmt_interface) if g.mgmt_interface|default("") else "")|tojson }},
   "auto_failover": {{ "true" if g.auto_failover|default("1") == "1" else "false" }},
   "allow_ha_only_promote": {{ "true" if g.allow_ha_only_promote|default("0") == "1" else "false" }},
   "force_promisc": {{ "true" if g.force_promisc|default("0") == "1" else "false" }},
-  "notify_level": "{{ g.notify_level|default("warning") }}",
-  "notify_webhook": "{{ g.notify_webhook|default("") }}",
-  "fence_command": "{{ g.fence_command|default("") }}",
+  "notify_level": {{ g.notify_level|default("warning")|tojson }},
+  "notify_webhook": {{ g.notify_webhook|default("")|tojson }},
+  "fence_command": {{ g.fence_command|default("")|tojson }},
   "preempt": {{ "true" if g.preempt|default("0") == "1" else "false" }},
-  "preempt_delay": {{ g.preempt_delay|default("300") }},
-  "monitor_interfaces": "{{ g.monitor_interfaces|default("") }}",
+  "preempt_delay": {{ g.preempt_delay|default("300")|int }},
+  "monitor_interfaces": {{ g.monitor_interfaces|default("")|tojson }},
   "health_services": {{ "true" if g.health_services|default("0") == "1" else "false" }},
-  "detect_time": {{ g.detect_time|default("2") }},
-  "mgmt_probe_targets": "{{ g.mgmt_probe_targets|default("") }}",
+  "detect_time": {{ g.detect_time|default("2")|int }},
+  "mgmt_probe_targets": {{ g.mgmt_probe_targets|default("")|tojson }},
   "sync_sessions": {{ "true" if g.sync_sessions|default("1") == "1" else "false" }},
-  "probe_targets": "{{ g.probe_targets|default("") }}",
-  "health_hold": {{ g.health_hold|default("6") }},
-  "pair_token": "{{ g.pair_token|default("") }}",
-  "pair_expires": "{{ g.pair_expires|default("") }}"
+  "probe_targets": {{ g.probe_targets|default("")|tojson }},
+  "health_hold": {{ g.health_hold|default("6")|int }},
+  "pair_token": {{ g.pair_token|default("")|tojson }},
+  "pair_expires": {{ g.pair_expires|default("")|tojson }}
 }

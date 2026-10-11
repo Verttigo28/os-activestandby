@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -35,7 +37,9 @@ func (d *Daemon) serveCtl() error {
 	if network == "unix" {
 		os.Remove(addr)
 	}
-	l, err := net.Listen(network, addr)
+	var l net.Listener
+	var err error
+	withUmask(0o177, func() { l, err = net.Listen(network, addr) })
 	if err != nil {
 		return err
 	}
@@ -188,6 +192,7 @@ func runCtl(args []string) int {
 	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
 	peer := fs.String("peer", "", "")
 	token := fs.String("token", "", "")
+	tokFile := fs.String("token-file", "", "") // the GUI hands the token over in a root-only file: argv is visible to every local user
 	force := fs.Bool("force", false, "")
 	hours := fs.Int("hours", defaultMaintenanceHours, "")
 	failback := fs.Bool("failback", false, "")
@@ -220,6 +225,14 @@ func runCtl(args []string) int {
 	case "promote":
 		resp, err = cl.Post("http://ctl/promote?force="+fmt.Sprint(*force), "application/json", nil)
 	case "pair":
+		if *tokFile != "" {
+			t, ferr := readTokenFile(*tokFile)
+			if ferr != nil {
+				fmt.Println(`{"error":"cannot read the pairing token"}`)
+				return 1
+			}
+			*token = t
+		}
 		b, _ := json.Marshal(map[string]string{"peer": *peer, "token": *token})
 		resp, err = cl.Post("http://ctl/pair", "application/json", bytes.NewReader(b))
 	case "kit":
@@ -317,4 +330,20 @@ func (d *Daemon) ctlFailover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "ok", "message": msg})
+}
+
+var tokenFileRe = regexp.MustCompile(`^/var/run/aspt[A-Za-z0-9]{4,32}$`)
+
+// readTokenFile reads and removes a token file written by the GUI controller (root-only, fixed place and name).
+func readTokenFile(path string) (string, error) {
+	if !tokenFileRe.MatchString(path) {
+		return "", errors.New("unexpected token file name")
+	}
+	defer os.Remove(path)
+	fi, err := os.Lstat(path)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > 256 {
+		return "", errors.New("unusable token file")
+	}
+	b, err := os.ReadFile(path)
+	return strings.TrimSpace(string(b)), err
 }

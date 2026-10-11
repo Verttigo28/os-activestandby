@@ -24,6 +24,8 @@ foreach ($n in $Nodes) {
 set -e
 umask 022
 tar -xf /tmp/activestandby.tar -C /usr/local --no-same-owner --no-same-permissions
+chmod 0755 /usr/local
+find /usr/local -xdev -type d \( -perm -0020 -o -perm -0002 \) ! -perm -1000 -exec chmod g-w,o-w {} + # the tar of a Windows tree carries 777 directory entries
 find /usr/local/opnsense /usr/local/etc -path "*ctiveStandby*" -exec chmod go-w {} +; chmod go-w /usr/local/opnsense/scripts/OPNsense /usr/local/opnsense/mvc/app/models/OPNsense /usr/local/opnsense/mvc/app/controllers/OPNsense /usr/local/opnsense/mvc/app/views/OPNsense
 chmod 0755 /usr/local/etc/rc.syshook.d/early/05-activestandby /usr/local/etc/rc.syshook.d/config/50-activestandby /usr/local/sbin/hasyncd /usr/local/etc/rc.d/hasyncd /usr/local/opnsense/scripts/OPNsense/ActiveStandby/*.php /usr/local/opnsense/scripts/OPNsense/ActiveStandby/*.sh
 chmod 0644 /usr/local/opnsense/service/conf/actions.d/actions_activestandby.conf

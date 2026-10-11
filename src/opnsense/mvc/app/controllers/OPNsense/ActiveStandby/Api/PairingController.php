@@ -27,7 +27,14 @@ class PairingController extends ApiControllerBase
         }
         $out = trim((new Backend())->configdpRun("activestandby $action", $params));
         $json = json_decode($out, true);
-        return is_array($json) ? $json : ['error' => $out === '' ? 'no answer from hasyncd' : $out];
+        if (is_array($json)) {
+            return $json;
+        }
+        if ($out !== '') {
+            syslog(LOG_WARNING, 'activestandby: unexpected answer from configd action ' . $action . ': ' . substr($out, 0, 300));
+        }
+        // raw output of helpers is never shown to the browser
+        return ['error' => $out === '' ? 'no answer from hasyncd' : 'unexpected answer from hasyncd (see the system log)'];
     }
 
     public function statusAction()
@@ -122,7 +129,17 @@ class PairingController extends ApiControllerBase
         if (!preg_match('/^[A-Za-z2-7]{5}(-?[A-Za-z2-7]{5}){3}$/', $token)) {
             return ['error' => gettext('Invalid pairing token format.')];
         }
-        return $this->ctl('ctl_pair', [$peer, $token]);
+        // the token goes to the daemon in a root-only file (the command line of a process is visible to every local user)
+        $old = umask(0077);
+        $file = tempnam('/var/run', 'aspt');
+        umask($old);
+        if ($file === false || file_put_contents($file, $token) === false) {
+            return ['error' => gettext('Could not hand the pairing token to the daemon.')];
+        }
+        chmod($file, 0600);
+        $result = $this->ctl('ctl_pair', [$peer, $file]);
+        @unlink($file); // normally already removed by the daemon
+        return $result;
     }
 
     /** Primary: build the configuration file for the second firewall (restore it there, pairing is automatic). */

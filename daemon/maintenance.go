@@ -31,6 +31,9 @@ func (d *Daemon) setMaintenance(on bool, hours int, fromPeer bool) {
 	if hours <= 0 {
 		hours = defaultMaintenanceHours
 	}
+	if hours > 72 {
+		hours = 72 // also keeps time.Duration(hours)*time.Hour far from overflowing
+	}
 	until := ""
 	if on {
 		until = time.Now().Add(time.Duration(hours) * time.Hour).UTC().Format(time.RFC3339)
@@ -63,6 +66,16 @@ func (d *Daemon) handleMaintenance(w http.ResponseWriter, r *http.Request) {
 // was down while the mode was switched (it would otherwise keep a stale "on" and pause its own failover).
 func (d *Daemon) reconcileMaintenance(m hbMsg) {
 	st := d.store.Get()
+	// the peer is trusted but not blindly: both stamps must parse, and the deadline may not be absurdly far away
+	if _, err := time.Parse(time.RFC3339Nano, m.MaintAt); err != nil {
+		return
+	}
+	if m.MaintUntil != "" {
+		t, err := time.Parse(time.RFC3339, m.MaintUntil)
+		if err != nil || t.After(time.Now().Add(73*time.Hour)) {
+			return
+		}
+	}
 	if m.MaintAt == "" || m.MaintAt <= st.MaintAt { // RFC3339Nano UTC strings sort chronologically
 		return
 	}

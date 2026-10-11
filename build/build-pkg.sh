@@ -49,6 +49,9 @@ if [ -f /conf/activestandby/state.json ] && grep -q '"role": "\(master\|standby\
     echo "WARNING: this node is still paired. Break the pair first (System > Active/Standby HA, or: hasyncd ctl break)." >&2
 fi
 /usr/local/etc/rc.d/hasyncd onestop >/dev/null 2>&1 || true
+# a standby keeps its configuration locked by the daemon; once the daemon is gone nothing would ever unlock it.
+# The node stays silent (its config is the standby view): restore a backup before using it.
+chflags noschg /conf/config.xml 2>/dev/null || true
 EOF
 cat > "$META/+POST_DEINSTALL" <<'EOF'
 rm -f /tmp/opnsense_menu_cache.xml /tmp/opnsense_acl_cache.json

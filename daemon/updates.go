@@ -26,6 +26,9 @@ type UpdateInfo struct {
 
 func loadUpdateInfo() UpdateInfo {
 	var u UpdateInfo
+	if fi, err := os.Lstat(pkgUpgradeJSON); err != nil || !fi.Mode().IsRegular() || fi.Size() > 1<<20 {
+		return u // missing, a link, or implausibly large: nothing to trust
+	}
 	b, err := os.ReadFile(pkgUpgradeJSON)
 	if err != nil {
 		return u

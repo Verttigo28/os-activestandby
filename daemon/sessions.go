@@ -64,8 +64,8 @@ func collectSessions(dir string) []sessionFile {
 		if !sessionName.MatchString(e.Name()) || e.IsDir() {
 			continue
 		}
-		fi, err := e.Info()
-		if err != nil || fi.Size() == 0 || fi.Size() > maxSessionSize {
+		fi, err := e.Info() // lstat: a symlink is not a regular file and is never followed
+		if err != nil || !fi.Mode().IsRegular() || fi.Size() == 0 || fi.Size() > maxSessionSize {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
@@ -106,7 +106,8 @@ func (s *sessionSync) applySessions(dir string, files []sessionFile) (written, r
 			continue
 		}
 		tmp := p + ".tmp"
-		if os.WriteFile(tmp, f.Data, 0o600) != nil {
+		os.Remove(tmp) // a planted symlink must not be written through: O_EXCL below refuses it
+		if writeExcl(tmp, f.Data, 0o600) != nil {
 			continue
 		}
 		t := time.Unix(f.MTime, 0)

@@ -41,3 +41,13 @@
 ## Reporting a vulnerability
 
 Please do not open a public issue. Use GitHub's private vulnerability reporting for this repository (Security tab > Report a vulnerability) or e-mail the maintainer listed in the `Makefile`. Include the version, steps to reproduce and the impact. Expect an acknowledgement within a few days.
+
+## Audit log (0.5.6)
+
+A full audit of the daemon, the GUI and helper scripts, and the CI/supply chain found no critical issue. Fixed in 0.5.6: loose umask inherited by helper processes, tokens visible on the command line, JSON injection through settings, unauthenticated hosts reaching the peer port, peer-controlled clock/maintenance/event flooding, symlink following in privileged writes, a single over-broad GUI privilege, a false-audit GET, raw helper output in the GUI, an over-broad wizard firewall rule, and several supply-chain items (see the changelog).
+
+Known and accepted:
+- **A paired peer is root-equivalent on the other node.** It replicates the full configuration (users, SSH keys, cron, the fencing command) and can ask for package installs, reboot and plugin settings. Protect both nodes as one unit and keep the HA link private.
+- **Tunnel-type interfaces** (gif, gre, wireguard, openvpn, ...) assigned as interfaces keep their configuration on a standby; their parent data interfaces are down. Review them before relying on the standby being completely silent.
+- **The update proxy** authenticates by source address only (plain HTTP on the HA link); it reaches repository hosts only. Use a dedicated HA cable.
+- **The signing key** is handed to the third-party FreeBSD VM action that builds the repository; see the release hardening notes in [building](building.md#signing).

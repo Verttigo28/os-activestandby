@@ -1,11 +1,32 @@
 <acl>
     <page-system-activestandby>
-        <name>System: Active/Standby HA (full control)</name>
+        <name>System: Active/Standby HA (administrator: settings, setup, kit download, break pair)</name>
         <patterns>
             <pattern>ui/activestandby/*</pattern>
             <pattern>api/activestandby/*</pattern>
         </patterns>
     </page-system-activestandby>
+    <page-system-activestandby-operate>
+        <name>System: Active/Standby HA (operator: status, failover, maintenance, upgrade, pre-flight)</name>
+        <patterns>
+            <pattern>ui/activestandby</pattern>
+            <pattern>ui/activestandby/index</pattern>
+            <pattern>api/activestandby/pairing/status</pattern>
+            <pattern>api/activestandby/pairing/events</pattern>
+            <pattern>api/activestandby/pairing/history</pattern>
+            <pattern>api/activestandby/pairing/health</pattern>
+            <pattern>api/activestandby/pairing/preflight</pattern>
+            <pattern>api/activestandby/pairing/failover</pattern>
+            <pattern>api/activestandby/pairing/promote</pattern>
+            <pattern>api/activestandby/pairing/maintenance</pattern>
+            <pattern>api/activestandby/pairing/upgradestart</pattern>
+            <pattern>api/activestandby/pairing/upgradecancel</pattern>
+            <pattern>api/activestandby/pairing/upgradestatus</pattern>
+            <pattern>api/activestandby/pairing/updates</pattern>
+            <pattern>api/activestandby/pairing/updatescheck</pattern>
+            <pattern>api/activestandby/metrics/*</pattern>
+        </patterns>
+    </page-system-activestandby-operate>
     <page-system-activestandby-view>
         <name>System: Active/Standby HA (read-only status and metrics)</name>
         <patterns>

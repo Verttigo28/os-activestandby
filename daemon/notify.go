@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 )
 
@@ -33,14 +36,22 @@ func levelRank(l string) int {
 	return 1 // warning (default): changes, warnings, errors
 }
 
+var notifySlots = make(chan struct{}, 8) // at most 8 notifications in flight: a flood of events cannot spawn unbounded processes
+
 func (d *Daemon) notify(ev Event) {
+	select {
+	case notifySlots <- struct{}{}:
+	default:
+		return
+	}
+	defer func() { <-notifySlots }()
 	prio := map[string]string{"error": "daemon.err", "warning": "daemon.warning", "change": "daemon.notice", "info": "daemon.info"}[ev.Kind]
 	if prio == "" {
 		prio = "daemon.info"
 	}
-	go exec.Command("logger", "-t", "hasyncd", "-p", prio, "--", ev.Msg).Run()
+	exec.Command("logger", "-t", "hasyncd", "-p", prio, "--", ev.Msg).Run()
 	if d.cfg.NotifyWebhook != "" && kindRank(ev.Kind) >= levelRank(d.cfg.NotifyLevel) {
-		go d.postWebhook(ev)
+		d.postWebhook(ev)
 	}
 }
 
@@ -56,9 +67,31 @@ func (d *Daemon) postWebhook(ev Event) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "hasyncd/"+version)
-	resp, err := (&http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+	resp, err := webhookClient.Do(req)
 	if err != nil {
 		return
 	}
 	resp.Body.Close()
+}
+
+// webhookClient posts to the configured URL without following redirects and never to this host itself or to
+// link-local addresses (the daemon runs as root next to services that trust 127.0.0.1; a webhook is an outbound call).
+var webhookClient = &http.Client{
+	Timeout:       5 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout: 4 * time.Second,
+			Control: func(network, address string, _ syscall.RawConn) error {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					return err
+				}
+				if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()) {
+					return errors.New("webhook target is a loopback or link-local address")
+				}
+				return nil
+			},
+		}).DialContext,
+	},
 }

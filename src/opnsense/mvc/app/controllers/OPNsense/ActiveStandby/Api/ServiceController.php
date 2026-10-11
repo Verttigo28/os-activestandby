@@ -14,6 +14,9 @@ class ServiceController extends ApiMutableServiceControllerBase
 
     public function reconfigureAction()
     {
+        if (!$this->request->isPost()) {
+            return ['status' => 'failed']; // no audit line, no action: a GET must not write a false audit entry
+        }
         $who = preg_replace('/[^A-Za-z0-9._-]/', '', (string)($this->session->get('Username') ?? 'api'));
         $ip = preg_replace('/[^0-9a-fA-F.:]/', '', (string)$this->request->getClientAddress());
         $mark = 'service_reconfigure:by:' . $who . ':from:' . $ip;

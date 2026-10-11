@@ -10,7 +10,9 @@ import (
 // content, never empty or half-written: write temp, fsync it, rename, fsync the directory.
 func writeFileDurable(path string, data []byte, perm os.FileMode) error {
 	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	// never write through a pre-planted symlink: remove whatever is there, then create exclusively (O_EXCL also fails on a link)
+	os.Remove(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 	if err != nil {
 		return err
 	}
@@ -51,4 +53,17 @@ func syncFile(path string) error {
 	}
 	defer f.Close()
 	return f.Sync()
+}
+
+// writeExcl creates path exclusively (it fails if anything, including a symlink, is there already).
+func writeExcl(path string, data []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

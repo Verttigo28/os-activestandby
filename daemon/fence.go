@@ -26,7 +26,7 @@ func validateFenceCommand(path string) error {
 	if !filepath.IsAbs(path) || strings.ContainsAny(path, " \t\n;|&$`") {
 		return errors.New("fence command must be an absolute path without spaces or shell characters")
 	}
-	fi, err := os.Stat(path)
+	fi, err := os.Lstat(path) // a symlink is not accepted: what it points to could be swapped
 	if err != nil {
 		return err
 	}
@@ -36,7 +36,26 @@ func validateFenceCommand(path string) error {
 	if fi.Mode()&0o022 != 0 {
 		return errors.New("fence command is writable by group or others")
 	}
-	return checkOwnerRoot(fi)
+	if err := checkOwnerRoot(fi); err != nil {
+		return err
+	}
+	// and nobody but root may rename or replace it: every directory above must be root-owned and not group/world-writable
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		di, err := os.Lstat(dir)
+		if err != nil {
+			return err
+		}
+		if di.Mode()&0o022 != 0 {
+			return fmt.Errorf("directory %s is writable by group or others", dir)
+		}
+		if err := checkOwnerRoot(di); err != nil {
+			return fmt.Errorf("directory %s: %w", dir, err)
+		}
+		if dir == "/" || dir == "." || dir == filepath.Dir(dir) {
+			break
+		}
+	}
+	return nil
 }
 
 func (d *Daemon) runFence() error {

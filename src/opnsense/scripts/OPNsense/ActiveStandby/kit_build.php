@@ -12,6 +12,9 @@
  */
 
 [$self, $cfgPath, $haIp, $mgmtArg, $hostname, $token, $expires, $primaryHa] = array_pad($argv, 8, '');
+if ($token === '-') {
+    $token = (string)getenv('KIT_TOKEN'); // passed in the environment, never in argv
+}
 
 function fail(string $msg): void
 {
@@ -19,7 +22,7 @@ function fail(string $msg): void
     exit(1);
 }
 
-$tmp = tempnam('/tmp', 'kit');
+$tmp = tempnam(is_dir('/conf/activestandby') ? '/conf/activestandby' : '/tmp', 'kit'); // root-only directory when it exists
 exec(escapeshellcmd(__DIR__ . '/ifaces.php') . ' stdview ' . escapeshellarg($cfgPath) . ' ' . escapeshellarg($tmp) . ' 2>&1', $o, $rc);
 if ($rc !== 0) {
     @unlink($tmp);

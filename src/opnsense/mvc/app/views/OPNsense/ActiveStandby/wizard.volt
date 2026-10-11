@@ -130,9 +130,15 @@ $(function () {
             ajaxCall('/api/activestandby/settings/set', {activestandby: {general: {enabled: '1', ha_interface: ha, mgmt_interface: mgmt}}}, function (r) {
                 if (r.result !== 'saved') { alertBox('#wzApply', 'alert-danger', esc(JSON.stringify(r.validations || r))); return; }
                 if ($('#wzRule').is(':checked') && !pre.has_ha_rule) {
-                    ajaxCall('/api/firewall/filter/addRule', {rule: {enabled: '1', action: 'pass', interface: ha, direction: 'in', ipprotocol: 'inet',
-                        protocol: 'any', source_net: 'any', destination_net: 'any', description: 'ActiveStandby: allow HA link'}}, function () {
-                        ajaxCall('/api/firewall/filter/apply', {}, finish);
+                    // only what the HA link needs, from the HA segment to this firewall: the peer API and update proxy (TCP 7690-7691),
+                    // ping, and pfsync. Not "any": the GUI, SSH and DNS stay closed on this interface.
+                    const base = {enabled: '1', action: 'pass', interface: ha, direction: 'in', ipprotocol: 'inet', source_net: ha, destination_net: '(self)'};
+                    ajaxCall('/api/firewall/filter/addRule', {rule: Object.assign({}, base, {protocol: 'TCP', destination_port: '7690-7691', description: 'ActiveStandby: peer API and update proxy'})}, function () {
+                        ajaxCall('/api/firewall/filter/addRule', {rule: Object.assign({}, base, {protocol: 'ICMP', description: 'ActiveStandby: ping on the HA link'})}, function () {
+                            ajaxCall('/api/firewall/filter/addRule', {rule: Object.assign({}, base, {protocol: 'pfsync', description: 'ActiveStandby: pfsync'})}, function () {
+                                ajaxCall('/api/firewall/filter/apply', {}, finish);
+                            });
+                        });
                     });
                 } else { finish(); }
             });

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -111,7 +112,9 @@ func (d *Daemon) ctlKit(w http.ResponseWriter, r *http.Request) {
 	if mg == "" {
 		mg = "-"
 	}
-	out, err := exec.Command(kitScript, configPath(), req.HA, mg, req.Hostname, token, exp, d.haAddr).Output()
+	cmd := exec.Command(kitScript, configPath(), req.HA, mg, req.Hostname, "-", exp, d.haAddr)
+	cmd.Env = append(os.Environ(), "KIT_TOKEN="+token) // not on the command line: every local user can read argv with ps
+	out, err := cmd.Output()
 	if err != nil {
 		msg := err.Error()
 		if ee, ok := err.(*exec.ExitError); ok {

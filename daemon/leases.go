@@ -104,7 +104,7 @@ func (d *Daemon) handleFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad gzip", 400)
 		return
 	}
-	b, err := io.ReadAll(io.LimitReader(zr, 128<<20))
+	b, err := io.ReadAll(io.LimitReader(zr, 64<<20))
 	if err != nil {
 		http.Error(w, "bad body", 400)
 		return

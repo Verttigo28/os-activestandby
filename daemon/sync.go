@@ -156,7 +156,7 @@ func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad gzip", 400)
 		return
 	}
-	xml, err := io.ReadAll(io.LimitReader(zr, 256<<20))
+	xml, err := io.ReadAll(io.LimitReader(zr, 64<<20))
 	if err != nil || shaHex(xml) != r.Header.Get("X-SHA256") {
 		http.Error(w, "checksum mismatch", 400)
 		return

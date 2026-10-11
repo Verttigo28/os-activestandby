@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,10 +24,11 @@ type Event struct {
 }
 
 type Events struct {
-	mu   sync.Mutex
-	list []Event
-	path string
-	sink func(Event) // notification dispatcher (syslog, webhook), called asynchronously
+	recent map[string]time.Time // message -> last time it was recorded (flood protection)
+	mu     sync.Mutex
+	list   []Event
+	path   string
+	sink   func(Event) // notification dispatcher (syslog, webhook), called asynchronously
 }
 
 func openEvents(dir string) *Events {
@@ -48,6 +50,20 @@ func openEvents(dir string) *Events {
 }
 
 func (e *Events) add(kind, msg string) {
+	e.mu.Lock()
+	if e.recent == nil {
+		e.recent = map[string]time.Time{}
+	}
+	key := kind + "|" + msg
+	if t, ok := e.recent[key]; ok && time.Since(t) < 20*time.Second && !strings.HasPrefix(msg, "AUDIT") {
+		e.mu.Unlock() // the same event again within seconds: a flapping peer must not flood the log and the notifiers
+		return
+	}
+	e.recent[key] = time.Now()
+	if len(e.recent) > 200 {
+		e.recent = map[string]time.Time{key: time.Now()}
+	}
+	e.mu.Unlock()
 	ev := Event{Time: time.Now().UTC().Format(time.RFC3339), Kind: kind, Msg: msg}
 	e.mu.Lock()
 	defer e.mu.Unlock()

@@ -275,6 +275,11 @@ func (d *Daemon) handleJobAdopt(w http.ResponseWriter, r *http.Request) {
 			}
 		})
 	} else {
+		// the only legitimate hand-off: round 2 of an upgrade, delivered to the node that is about to become active
+		if j.Phase != "r2-update" || d.store.Get().State != StateStandby {
+			http.Error(w, "job not accepted", http.StatusBadRequest)
+			return
+		}
 		d.store.Update(func(s *State) { s.Job = &j })
 	}
 	writeJSON(w, 200, map[string]string{"status": "ok"})

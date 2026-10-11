@@ -15,5 +15,12 @@ load_rc_config $name
 pidfile=/var/run/hasyncd.pid
 command=/usr/sbin/daemon
 command_args="-r -f -P ${pidfile} -o /var/log/hasyncd.log /usr/local/sbin/hasyncd daemon"
+start_precmd="hasyncd_precmd"
+hasyncd_precmd()
+{
+	# the rendered daemon config holds the webhook URL and a pairing token: root only
+	[ -f /usr/local/etc/hasyncd.json ] && chmod 0600 /usr/local/etc/hasyncd.json
+	return 0
+}
 
 run_rc_command "$1"
