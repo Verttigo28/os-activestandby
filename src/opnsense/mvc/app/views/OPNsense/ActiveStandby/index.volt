@@ -95,13 +95,36 @@
         $('#bannerKitStop').click(function (e) { e.preventDefault(); ajaxCall('/api/activestandby/pairing/kitcancel', {}, function () { refreshStatus(); }); });
         $('#toggleSbEvents').click(function (e) { e.preventDefault(); $('#sbEvents').toggle(); });
 
-        let seenWho = null;
+        let seenWho = null, misses = 0;
+        // Reload at most once every 10 s, whatever happens (never a reload loop).
+        function reloadOnce() {
+            try {
+                const last = parseInt(sessionStorage.getItem('asReload') || '0', 10);
+                if (Date.now() - last < 10000) { return; }
+                sessionStorage.setItem('asReload', String(Date.now()));
+            } catch (e) { /* storage blocked: reload anyway */ }
+            location.reload();
+        }
+        // Status poll that survives a failover: the shared address is unreachable for a moment, then answered by the other
+        // firewall (maybe without our login). Recovery after an outage or a non-JSON answer reloads the page.
+        function statusGet(cb) {
+            $.ajax({url: '/api/activestandby/pairing/status', dataType: 'json', timeout: 4000, cache: false})
+                .done(function (s) {
+                    if (misses >= 2) { reloadOnce(); return; }
+                    misses = 0;
+                    cb(s);
+                })
+                .fail(function (xhr) {
+                    if (xhr.status === 401 || xhr.status === 403 || xhr.status === 200) { reloadOnce(); return; } // login page instead of JSON
+                    misses++;
+                });
+        }
         function refreshStatus() {
-            ajaxGet('/api/activestandby/pairing/status', {}, function (s) {
+            statusGet(function (s) {
                 // The shared address is now answered by the other firewall (failover) or this one changed role: reload,
                 // so the page, its menus and its buttons belong to the node that is serving them.
                 const who = (s.hostname || '') + '|' + (s.state || '') + '|' + (s.role || '');
-                if (seenWho !== null && who !== seenWho && s.daemon === 'up') { location.reload(); return; }
+                if (seenWho !== null && who !== seenWho && s.daemon === 'up') { reloadOnce(); return; }
                 seenWho = who;
                 let rows = [
                     ['{{ lang._('This firewall') }}', (s.hostname || '-') + ' (' + (s.state || '-') + ', ' + (s.role === 'master' ? '{{ lang._('primary') }}' : (s.role === 'standby' ? '{{ lang._('secondary') }}' : s.role)) + ')'],
@@ -142,7 +165,7 @@
         refreshEvents();
         setInterval(refreshEvents, 10000);
         refreshStatus();
-        setInterval(refreshStatus, 5000);
+        setInterval(refreshStatus, 3000);
 
         $('#saveAct').click(function () {
             saveFormToEndpoint('/api/activestandby/settings/set', 'frm_general', function () {
@@ -168,13 +191,6 @@
             });
         });
 
-        function ha(path, data, title, text) {
-            stdDialogConfirm(title, text, '{{ lang._('Yes') }}', '{{ lang._('Cancel') }}', function () {
-                $('#actResult').attr('class', 'alert alert-info').text('{{ lang._('Working...') }}').show();
-                ajaxCall(path, data, function (r) { showResult('#actResult', r); refreshStatus(); });
-            });
-        }
-        $('#btnResync').click(function () { ha('/api/activestandby/pairing/resync', {}, '{{ lang._('Full resync') }}', '{{ lang._('Push the complete configuration to the standby again?') }}'); });
         function doFailover(force) {
             $('#actResult').attr('class', 'alert alert-info').text('{{ lang._('Working...') }}').show();
             ajaxCall('/api/activestandby/pairing/failover', force ? {force: '1'} : {}, function (r) {
@@ -188,8 +204,6 @@
         $('#btnFailover').click(function () {
             stdDialogConfirm('{{ lang._('Failover') }}', '{{ lang._('Switch the active role to the other node now?') }}', '{{ lang._('Yes') }}', '{{ lang._('Cancel') }}', function () { doFailover(false); });
         });
-        $('#btnPromote').click(function () { ha('/api/activestandby/pairing/promote', {force: '1'}, '{{ lang._('Force active') }}', '{{ lang._('Make THIS node active without asking the peer. If the peer is still active both nodes will fight over the same IPs. Continue?') }}'); });
-        $('#btnDemote').click(function () { ha('/api/activestandby/pairing/demote', {}, '{{ lang._('Force standby') }}', '{{ lang._('Put THIS node in standby: its data interfaces go down. Continue?') }}'); });
 
         $('#btnBreak').click(function () {
             stdDialogConfirm('{{ lang._('Break pair') }}', '{{ lang._('Both nodes become standalone again. Continue?') }}', '{{ lang._('Yes') }}', '{{ lang._('Cancel') }}', function () {
@@ -259,9 +273,6 @@
             <table class="table table-condensed" id="statusTable" style="max-width:700px"><tbody></tbody></table>
             <div id="haActions" style="display:none; margin-bottom:10px">
                 <button class="btn btn-warning" id="btnFailover">{{ lang._('Failover now') }}</button>
-                <button class="btn btn-default" id="btnPromote">{{ lang._('Force this node active') }}</button>
-                <button class="btn btn-default" id="btnResync">{{ lang._('Full resync') }}</button>
-                <button class="btn btn-default" id="btnDemote">{{ lang._('Force this node standby') }}</button>
             </div>
             <div id="actResult" class="alert" style="display:none"></div>
             <div id="breakResult" class="alert" style="display:none"></div>

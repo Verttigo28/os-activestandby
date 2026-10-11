@@ -2,6 +2,11 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 0.5.2
+- The status page now also reloads when the answers stop and come back (failover outage) or when the new node answers without your login; the poll runs every 3 s and never loops.
+- Removed "Force this node active", "Force this node standby" and "Full resync" from the Status page: *Failover now* is the one button (the emergency takeover stays on a standby whose active node is silent). The matching demote API was removed.
+- CI runs staticcheck; dead code removed.
+
 ## 0.5.1
 - Both firewalls are named in the status tiles, the details and the dashboard widget, with who is active and who is standby, primary or secondary.
 - The page reloads by itself when the firewall answering the shared address changes (failover) or this one changes role, so it never shows the old node's buttons.

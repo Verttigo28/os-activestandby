@@ -132,7 +132,7 @@ func (d *Daemon) pushConfig(b []byte, sha string) error {
 func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 	st := d.store.Get()
 	if st.State != StateStandby {
-		http.Error(w, "this node is not standby", 409)
+		http.Error(w, "this node is not standby", http.StatusConflict)
 		return
 	}
 	rev, _ := strconv.ParseUint(r.Header.Get("X-Rev"), 10, 64)

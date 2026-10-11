@@ -91,12 +91,12 @@ func (d *Daemon) leaseStep() {
 // handleFile (standby): accept a lease file from the active peer.
 func (d *Daemon) handleFile(w http.ResponseWriter, r *http.Request) {
 	if d.store.Get().State != StateStandby {
-		http.Error(w, "not standby", 409)
+		http.Error(w, "not standby", http.StatusConflict)
 		return
 	}
 	path, ok := leaseFiles[r.URL.Query().Get("name")]
 	if !ok {
-		http.Error(w, "file not allowed", 403)
+		http.Error(w, "file not allowed", http.StatusForbidden)
 		return
 	}
 	zr, err := gzip.NewReader(io.LimitReader(r.Body, 32<<20))

@@ -287,7 +287,6 @@ type updateRun struct {
 	running bool
 	done    bool
 	rc      int
-	log     string
 }
 
 // kept in the root-only state directory: a fixed name in /tmp could be pre-created as a symlink by a local user
@@ -296,13 +295,13 @@ const updateLog = "/conf/activestandby/update.log"
 func (d *Daemon) handleUpdateStart(w http.ResponseWriter, r *http.Request) {
 	st := d.store.Get()
 	if st.State != StateStandby || !d.maintenanceOn() {
-		http.Error(w, "refused: only a standby in maintenance mode may be updated", 409)
+		http.Error(w, "refused: only a standby in maintenance mode may be updated", http.StatusConflict)
 		return
 	}
 	d.upd.mu.Lock()
 	if d.upd.running {
 		d.upd.mu.Unlock()
-		http.Error(w, "an update is already running", 409)
+		http.Error(w, "an update is already running", http.StatusConflict)
 		return
 	}
 	d.upd.running, d.upd.done, d.upd.rc = true, false, 0
@@ -343,7 +342,7 @@ func (d *Daemon) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 func (d *Daemon) handleReboot(w http.ResponseWriter, r *http.Request) {
 	if d.store.Get().State != StateStandby || !d.maintenanceOn() {
-		http.Error(w, "refused: only a standby in maintenance mode may be rebooted", 409)
+		http.Error(w, "refused: only a standby in maintenance mode may be rebooted", http.StatusConflict)
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "rebooting"})

@@ -169,11 +169,6 @@ class PairingController extends ApiControllerBase
         return $this->ctl($this->request->getPost('force') === '1' ? 'ctl_promote_force' : 'ctl_promote');
     }
 
-    public function demoteAction()
-    {
-        return $this->request->isPost() ? $this->ctl('ctl_demote') : ['error' => 'POST required'];
-    }
-
     public function eventsAction()
     {
         return $this->ctl('ctl_events');
