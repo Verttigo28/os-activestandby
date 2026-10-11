@@ -95,7 +95,7 @@ jobs:
         with:
           name: src-with-daemon
           path: .
-      - name: signed pkg repository: start from what is already published
+      - name: signed pkg repository, start from what is already published
         id: repo
         if: env.PKG_SIGNING_KEY != ''
         continue-on-error: true
