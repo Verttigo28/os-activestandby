@@ -152,6 +152,9 @@ jobs:
           files: |
             dist/os-activestandby-*.pkg
             dist/SHA256SUMS
+      - name: the workspace may come back from the FreeBSD VM without its git metadata (the publish action needs a repository)
+        if: hashFiles('dist/repo/.signed') != ''
+        run: git rev-parse --git-dir >/dev/null 2>&1 || git init -q
       - name: publish the signed pkg repository (GitHub Pages branch gh-pages)
         if: hashFiles('dist/repo/.signed') != ''
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4
