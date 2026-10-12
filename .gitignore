@@ -5,6 +5,7 @@ lab/vms/
 lab/tools/*.png
 daemon/*.exe
 
+todo/
 lab/.lab-password
 dist/
 lab/tools/*.out
