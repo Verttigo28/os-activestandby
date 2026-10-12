@@ -592,3 +592,53 @@ func TestConfigRejectsUnknownMode(t *testing.T) {
 		}
 	}
 }
+
+// The production layout of one of the users: every network is a VLAN on a LACP LAGG, the WAN too.
+func TestVLANsOnALAGGNeverEnterTheWarmSet(t *testing.T) {
+	p := sanitize(WarmPlan{Ifaces: []WarmIface{
+		{Key: "wan", Dev: "vlan0.20", Parent: "lagg0", MAC: macShared1, V4: "10.0.0.1/24", Eligible: true},
+		{Key: "lan", Dev: "vlan0.10", Parent: "lagg0", MAC: macShared2, V4: "192.168.1.1/24", Eligible: true},
+		{Key: "x", Dev: "lagg1", MAC: "02:aa:bb:cc:dd:07", V4: "172.16.0.1/24", Eligible: true},
+		{Key: "b", Dev: "bridge0", MAC: "02:aa:bb:cc:dd:08", V4: "172.17.0.1/24", Eligible: true},
+		{Key: "nested", Dev: "vlan0.30", Parent: "vlan0.10", MAC: "02:aa:bb:cc:dd:09", V4: "172.18.0.1/24", Eligible: true},
+		{Key: "nomac", Dev: "igb2", MAC: "00:00:00:00:00:00", V4: "172.19.0.1/24", Eligible: true},
+		{Key: "ok", Dev: "igb3", MAC: "02:aa:bb:cc:dd:0a", V4: "172.20.0.1/24", Eligible: true},
+	}})
+	got := warmDevices(p, nil)
+	if !reflect.DeepEqual(got, map[string]string{"igb3": "02:aa:bb:cc:dd:0a"}) {
+		t.Fatalf("only the plain NIC may be warm, got %v", got)
+	}
+	for _, i := range p.Ifaces {
+		if i.Key != "ok" && (i.Eligible || i.Reason == "") {
+			t.Fatalf("%s must be ineligible with a reason: %+v", i.Key, i)
+		}
+	}
+	// and nothing at all is ever run against the LAGG
+	w := newWire(macShared1)
+	d, h := warmNode(t, w, "B", standbyState(RoleStandby, 5), map[string]*fakeDev{"lagg0": nic("00:00:00:00:00:00")})
+	d.act.plan = func(string) (WarmPlan, error) {
+		return WarmPlan{Ifaces: []WarmIface{{Key: "wan", Dev: "vlan0.20", Parent: "lagg0", MAC: macShared1, V4: "10.0.0.1/24", Eligible: true}}}, nil
+	}
+	d.warmReadiness(d.activeXMLPath(), IfaceSet{ForceDown: []string{"lagg0", "vlan0.20"}})
+	if len(h.commands()) != 0 {
+		t.Fatalf("commands run against a LAGG: %q", h.commands())
+	}
+	if ok, _ := d.warmReady(); ok {
+		t.Fatal("no interface qualifies: not ready")
+	}
+}
+
+func TestZeroMACIsNeverAHardwareMAC(t *testing.T) {
+	h := openHWMacs(t.TempDir())
+	if mac, ok := h.resolve("lagg0", "", ifState{Ether: "3c:fd:fe:2d:bc:40", HW: "00:00:00:00:00:00"}); !ok || mac != "3c:fd:fe:2d:bc:40" {
+		t.Fatalf("an all-zero hwaddr must be ignored: %v %v", mac, ok)
+	}
+	if _, ok := h.resolve("x0", "", ifState{Ether: "00:00:00:00:00:00"}); ok {
+		t.Fatal("an all-zero MAC is not usable")
+	}
+	for in, want := range map[string]bool{"02:aa:bb:cc:dd:01": true, "00:11:22:33:44:55": true, "01:00:5e:00:00:01": false, "00:00:00:00:00:00": false, "zz": false, "": false} {
+		if validMAC(in) != want {
+			t.Fatalf("validMAC(%q) != %v", in, want)
+		}
+	}
+}

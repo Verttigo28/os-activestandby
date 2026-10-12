@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -241,9 +242,9 @@ func (h *hwMacs) resolve(dev, shared string, st ifState) (string, bool) {
 		return mac, true
 	}
 	switch {
-	case st.HW != "":
+	case validMAC(st.HW):
 		return learn(st.HW)
-	case st.Ether != "" && !macEq(st.Ether, shared):
+	case validMAC(st.Ether) && !macEq(st.Ether, shared):
 		return learn(st.Ether)
 	}
 	mac, ok := h.m[dev]
@@ -293,6 +294,7 @@ func (d *Daemon) warmPlanFor(path string) (*WarmPlan, error) {
 	}
 	if d.act != nil && d.act.plan != nil {
 		p, err := d.act.plan(path)
+		p = sanitize(p)
 		return &p, err
 	}
 	d.ops.planMu.Lock()
@@ -305,6 +307,7 @@ func (d *Daemon) warmPlanFor(path string) (*WarmPlan, error) {
 	if err != nil {
 		return nil, err
 	}
+	p = sanitize(p)
 	if fi != nil {
 		d.ops.plan, d.ops.planMtime, d.ops.planPath = &p, fi.ModTime(), path
 	}
@@ -564,4 +567,46 @@ func (d *Daemon) warmChecks() []Check {
 		cs = append(cs, warn("warm standby: classic interfaces", "these interfaces keep the classic takeover: "+strings.Join(classic, "; ")))
 	}
 	return cs
+}
+
+var (
+	plainNICRe  = regexp.MustCompile(`^[a-z]+[0-9]+$`)
+	virtualNICs = regexp.MustCompile(`^(lagg|bridge|gre|gif|vxlan|qinq|epair|ppp|pppoe|pptp|l2tp|vlan|lo|enc|pflog|pfsync|tun|tap|wg|ovpn[sc]?|ipsec)[0-9]*$`)
+)
+
+// plainNIC: a physical-style Ethernet device (em0, igb1, ixl0, hn0, vtnet0 ...). LAGG, bridges, tunnels and nested VLANs are not.
+func plainNIC(dev string) bool { return plainNICRe.MatchString(dev) && !virtualNICs.MatchString(dev) }
+
+// sanitize enforces in Go what ifaces.php already decided, so a plan from another version or a bug there can never put a
+// LAGG, a bridge or a VLAN on a LAGG in the warm set (their MAC and link are managed by other code).
+func sanitize(p WarmPlan) WarmPlan {
+	out := WarmPlan{Ifaces: make([]WarmIface, len(p.Ifaces))}
+	copy(out.Ifaces, p.Ifaces)
+	for i := range out.Ifaces {
+		e := &out.Ifaces[i]
+		if !e.Eligible {
+			continue
+		}
+		switch {
+		case e.Parent == "" && !plainNIC(e.Dev):
+			e.Eligible, e.Reason = false, e.Dev+" is not a plain NIC"
+		case e.Parent != "" && !plainNIC(e.Parent):
+			e.Eligible, e.Reason = false, "the VLAN sits on "+e.Parent+", which is not a plain NIC"
+		case !validMAC(e.MAC) || e.V4 == "":
+			e.Eligible, e.Reason = false, "no usable shared MAC or static IPv4 address"
+		}
+	}
+	return out
+}
+
+var macRe = regexp.MustCompile(`^([0-9a-f]{2}:){5}[0-9a-f]{2}$`)
+
+// validMAC: a unicast, non-zero Ethernet address.
+func validMAC(m string) bool {
+	m = strings.ToLower(m)
+	if !macRe.MatchString(m) || m == "00:00:00:00:00:00" {
+		return false
+	}
+	b, _ := strconv.ParseUint(m[:2], 16, 8)
+	return b&1 == 0
 }

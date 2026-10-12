@@ -99,6 +99,9 @@ function warmPlan(SimpleXMLElement $cfg): array
             $why = 'device type is not supported by the warm standby';
         } elseif ($parent === '' && preg_match('/^(lagg|bridge|gre|gif|vxlan|qinq|epair|ppp|pppoe|pptp|l2tp|vlan)\d*$/', $i['dev'])) {
             $why = 'device type ' . preg_replace('/\d+$/', '', $i['dev']) . ' is not supported by the warm standby';
+        } elseif ($parent !== '' && (!preg_match('/^[a-z]+[0-9]+$/', $parent)
+            || preg_match('/^(lagg|bridge|gre|gif|vxlan|qinq|epair|ppp|pppoe|pptp|l2tp|vlan)\d*$/', $parent))) {
+            $why = 'the VLAN sits on ' . $parent . ', which is not a plain NIC (LAGG, bridge and nested VLANs use the classic takeover)';
         } elseif (!preg_match('/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i', $i['spoofmac']) || (hexdec(substr($i['spoofmac'], 0, 2)) & 1)) {
             $why = 'no shared MAC address (spoofmac) is set';
         } elseif (filter_var((string)$node->ipaddr, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false
