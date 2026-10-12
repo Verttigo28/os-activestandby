@@ -105,7 +105,7 @@ func (d *Daemon) ctlStatus(w http.ResponseWriter, r *http.Request) {
 		"pairing_open": active, "state": st.State, "state_lost": st.Corrupt, "proxy_port": proxyPort(d.cfg), "auto_failover": d.cfg.autoOn(), "auto_blocked": d.auto.Blocked(),
 		"mgmt_address": d.mgmtAddr(), "peer_mgmt": st.PeerMgmt,
 		"os_version": d.localVer, "maintenance": d.maintenanceOn(), "maintenance_until": st.MaintenanceUntil,
-		"health": d.healthReason(), "drift": d.driftReason(), "fencing": d.cfg.FenceCommand != "", "preempt": d.cfg.Preempt,
+		"health": d.healthReason(), "degraded": d.degradedReason(), "pfsync_problem": d.pfsyncStatus(), "package_diff": d.packageReport(), "failover_in_progress": d.failing.Load(), "drift": d.driftReason(), "fencing": d.cfg.FenceCommand != "", "preempt": d.cfg.Preempt,
 	}
 	if st.Kit != nil {
 		out["kit"] = map[string]string{"peer": st.Kit.Peer, "expires": st.Kit.Expires, "error": st.Kit.Error}

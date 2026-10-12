@@ -14,11 +14,13 @@ import (
 const maxHistory = 200
 
 type HistoryEntry struct {
-	Time       string `json:"time"`
-	Type       string `json:"type"` // promote | demote
-	Reason     string `json:"reason"`
-	DurationMs int64  `json:"duration_ms"`
-	Epoch      uint64 `json:"epoch"`
+	Time       string  `json:"time"`
+	Type       string  `json:"type"` // promote | demote
+	Reason     string  `json:"reason"`
+	DurationMs int64   `json:"duration_ms"`
+	Epoch      uint64  `json:"epoch"`
+	Phases     []Phase `json:"phases,omitempty"`    // promote: where the time went
+	DetectMs   int64   `json:"detect_ms,omitempty"` // automatic promote: how long the peer had been silent
 }
 
 type History struct {

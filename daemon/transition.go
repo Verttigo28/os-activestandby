@@ -1,0 +1,241 @@
+package main
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
+	"sync"
+	"time"
+)
+
+// Transactional hand-over.
+//
+// A graceful failover asks the peer to promote after this node demoted itself. The answer can be lost (timeout,
+// cable pulled, peer restarted) while the peer did promote. Rolling back on the strength of a missing answer would put
+// the same IP/MAC on both nodes. Every promote request therefore carries a unique transition id (tid), and the peer keeps
+// a small record of what it did with it:
+//
+//	started -> done | failed          (the request was executed)
+//	aborted                           (the requester cancelled it before it started: it can never run afterwards)
+//
+// Before this node takes its role back it asks the peer to abort the transition (/v1/abort). The peer answers with the
+// state of the tid and its own role, atomically with respect to /v1/promote. Only "the peer never started it (now it
+// cannot) or failed it, and it is standby" allows a rollback. Anything else keeps this node standby.
+
+const (
+	txStarted = "started"
+	txDone    = "done"
+	txFailed  = "failed"
+	txAborted = "aborted"
+
+	txKeep = 64 // transitions remembered
+)
+
+var tidRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// How long (and how often) the requester polls the peer for the outcome of a transition whose answer was lost.
+var (
+	resolveEvery  = time.Second
+	resolveWindow = 45 * time.Second
+	// abortHold: after it cancelled a transition the peer (this node) does not elect itself active on its own for a while,
+	// the requester is about to take its role back.
+	abortHold = 45 * time.Second
+)
+
+type txLog struct {
+	mu    sync.Mutex
+	m     map[string]string
+	order []string
+}
+
+func newTID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // no entropy: refusing to run is safer than a predictable id
+	}
+	return hex.EncodeToString(b)
+}
+
+func (t *txLog) set(tid, status string) {
+	if t.m == nil {
+		t.m = map[string]string{}
+	}
+	if _, ok := t.m[tid]; !ok {
+		t.order = append(t.order, tid)
+		if len(t.order) > txKeep {
+			delete(t.m, t.order[0])
+			t.order = t.order[1:]
+		}
+	}
+	t.m[tid] = status
+}
+
+// begin registers the execution of tid. "" means: go ahead. Otherwise the existing status is returned and nothing may run.
+func (t *txLog) begin(tid string) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if s := t.m[tid]; s != "" {
+		return s
+	}
+	t.set(tid, txStarted)
+	return ""
+}
+
+func (t *txLog) finish(tid string, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err != nil {
+		t.set(tid, txFailed)
+		return
+	}
+	t.set(tid, txDone)
+}
+
+// abort cancels tid if it never started and returns its status afterwards.
+func (t *txLog) abort(tid string) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if s := t.m[tid]; s != "" {
+		return s
+	}
+	t.set(tid, txAborted)
+	return txAborted
+}
+
+// ---- peer side ----
+
+// handlePromote: the active peer asks us (standby) to take over after it demoted itself.
+func (d *Daemon) handlePromote(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	tid := q.Get("tid")
+	if tid != "" && !tidRe.MatchString(tid) {
+		writeJSON(w, 400, map[string]string{"error": "malformed transition id"})
+		return
+	}
+	st := d.store.Get()
+	// a command from a node whose leadership generation is older than ours is stale (delayed, duplicated, or sent by a node
+	// that lost a split-brain): never obey it
+	if e, err := strconv.ParseUint(q.Get("epoch"), 10, 64); err == nil && e < st.Epoch {
+		d.event("warning", "ignored a promote request with a stale epoch (%d < %d)", e, st.Epoch)
+		writeJSON(w, 409, map[string]string{"error": "stale epoch"})
+		return
+	}
+	if tid != "" {
+		switch s := d.tx.begin(tid); s {
+		case "":
+		case txDone: // the same request delivered again: it already happened
+			writeJSON(w, 200, map[string]any{"status": "active", "replay": true})
+			return
+		default:
+			writeJSON(w, 409, map[string]string{"error": "transition " + s, "tx": s})
+			return
+		}
+	}
+	if d.store.Get().State == StateActive {
+		if tid != "" {
+			d.tx.finish(tid, nil)
+		}
+		writeJSON(w, 409, map[string]string{"error": "already active", "state": StateActive})
+		return
+	}
+	t0 := time.Now()
+	err := d.doPromote("peer request")
+	if tid != "" {
+		d.tx.finish(tid, err)
+	}
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"status": "active", "ms": time.Since(t0).Milliseconds()})
+}
+
+// handleAbort: the node that asked us to promote did not get an answer. Cancel the transition unless it already started
+// and report what happened, together with our role.
+func (d *Daemon) handleAbort(w http.ResponseWriter, r *http.Request) {
+	tid := r.URL.Query().Get("tid")
+	if !tidRe.MatchString(tid) {
+		writeJSON(w, 400, map[string]string{"error": "malformed transition id"})
+		return
+	}
+	s := d.tx.abort(tid)
+	if s == txAborted {
+		d.auto.holdUntil.Set(time.Now().Add(abortHold))
+	}
+	st := d.store.Get()
+	writeJSON(w, 200, map[string]any{"tid": tid, "tx": s, "state": st.State, "epoch": st.Epoch, "busy": d.opsBusy()})
+}
+
+// ---- requester side ----
+
+type txOutcome int
+
+const (
+	outcomeUnknown       txOutcome = iota // the peer could not be asked, or is still busy: do NOT take the role back
+	outcomePeerActive                     // the peer is active: we are the standby
+	outcomePeerStandby                    // the peer did not and will not take over: taking the role back is safe
+	outcomePeerAmbiguous                  // peer says the transition ran but it is not active: manual decision
+)
+
+// resolveTransition asks the peer what became of tid until the answer is conclusive or the window is over.
+func (d *Daemon) resolveTransition(tid string) (txOutcome, string) {
+	deadline := time.Now().Add(resolveWindow)
+	last := "no answer from the peer"
+	for {
+		out, err := d.callPeer("/v1/abort?tid="+url.QueryEscape(tid), 5*time.Second)
+		if err == nil {
+			state, _ := out["state"].(string)
+			tx, _ := out["tx"].(string)
+			last = "peer state " + state + ", transition " + tx
+			switch {
+			case state == StateActive:
+				return outcomePeerActive, last
+			case tx == txAborted || tx == txFailed:
+				if state == StateStandby {
+					return outcomePeerStandby, last
+				}
+			case tx == txDone:
+				return outcomePeerAmbiguous, last
+			}
+		} else {
+			last = err.Error()
+		}
+		if time.Now().After(deadline) {
+			return outcomeUnknown, last
+		}
+		time.Sleep(resolveEvery)
+	}
+}
+
+// ---- seams for the tests ----
+
+// actions lets the tests replace what touches the system and the network. Nil fields mean the real thing.
+type actions struct {
+	promote    func(reason string) error
+	demoteHook func(reason string, afterDown func()) error
+	peerCall   func(path string, timeout time.Duration) (map[string]any, error)
+}
+
+func (d *Daemon) doPromote(reason string) error {
+	if d.act != nil && d.act.promote != nil {
+		return d.act.promote(reason)
+	}
+	return d.promote(reason)
+}
+
+func (d *Daemon) doDemote(reason string, afterDown func()) error {
+	if d.act != nil && d.act.demoteHook != nil {
+		return d.act.demoteHook(reason, afterDown)
+	}
+	return d.demoteHook(reason, afterDown)
+}
+
+func (d *Daemon) callPeer(path string, timeout time.Duration) (map[string]any, error) {
+	if d.act != nil && d.act.peerCall != nil {
+		return d.act.peerCall(path, timeout)
+	}
+	return d.peerCall(path, timeout)
+}

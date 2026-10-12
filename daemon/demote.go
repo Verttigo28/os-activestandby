@@ -67,6 +67,7 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) error {
 	}
 	step(t0, "standby view written")
 	d.sess.trackExisting(sessionDir)
+	d.degraded.Store("")
 	d.event("change", "demoted to STANDBY (%s)", reason)
 	err = d.store.Update(func(s *State) { s.State = StateStandby })
 	d.hist.add(HistoryEntry{Type: "demote", Reason: reason, DurationMs: time.Since(t0).Milliseconds(), Epoch: d.store.Get().Epoch})

@@ -63,6 +63,7 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 		}
 	}
 	if len(install) == 0 {
+		d.setPkgReport(want, have)
 		return nil
 	}
 	sort.Strings(install)
@@ -89,6 +90,7 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 		return fmt.Errorf("package install failed (%s): %v: %s", strings.Join(install, ", "), err, tail)
 	}
 	after := collectInfo().Packages
+	d.setPkgReport(want, after)
 	for _, n := range install {
 		if after[n] != want[n] {
 			d.event("warning", "package %s is %q on the standby but %q on the active node", n, after[n], want[n])
@@ -99,3 +101,56 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 }
 
 var pkgName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._-]{0,80}$`)
+
+// packageDiff compares the active node's plugin list (want) with what is installed here (have). "different" lists plugins
+// that are missing or at another version, "extra" the plugins installed here that the active node does not have. The core
+// version and this plugin are checked separately; nothing here ever uninstalls anything.
+func packageDiff(want, have map[string]string) (different, extra []string) {
+	for n, v := range want {
+		if n == "opnsense" || n == "os-activestandby" || !pkgName.MatchString(n) {
+			continue
+		}
+		switch hv, ok := have[n]; {
+		case !ok:
+			different = append(different, n+" (missing here, active "+v+")")
+		case hv != v:
+			different = append(different, fmt.Sprintf("%s (active %s, here %s)", n, v, hv))
+		}
+	}
+	for n := range have {
+		if _, ok := want[n]; !ok && strings.HasPrefix(n, "os-") && n != "os-activestandby" {
+			extra = append(extra, n)
+		}
+	}
+	sort.Strings(different)
+	sort.Strings(extra)
+	return
+}
+
+// setPkgReport records how far the plugin set of this standby is from the active node's, for the status. A difference
+// does not block the configuration sync (a failed install does), but a failover onto a node with other plugin versions
+// is a risk the administrator must see.
+func (d *Daemon) setPkgReport(want, have map[string]string) {
+	diff, extra := packageDiff(want, have)
+	var parts []string
+	if len(diff) > 0 {
+		parts = append(parts, "plugins that differ from the active node: "+strings.Join(diff, ", "))
+	}
+	if len(extra) > 0 {
+		parts = append(parts, "plugins only installed here (not removed automatically): "+strings.Join(extra, ", "))
+	}
+	msg := strings.Join(parts, "; ")
+	if prev, _ := d.pkgReport.Load().(string); prev != msg {
+		if msg != "" {
+			d.event("warning", "package conformity: %s", msg)
+		} else if prev != "" {
+			d.event("info", "package conformity: both nodes have the same plugins again")
+		}
+	}
+	d.pkgReport.Store(msg)
+}
+
+func (d *Daemon) packageReport() string {
+	s, _ := d.pkgReport.Load().(string)
+	return s
+}

@@ -20,3 +20,10 @@ Open items, most valuable first. Done items live in the [changelog](../CHANGELOG
 10. Optional encryption of pfsync when the HA link is not a dedicated cable.
 11. Two heartbeat cables and an optional third-party witness for the isolation guard.
 12. IPv6 neighbour announcements.
+
+## From the failover audit (see `docs/audit.md`)
+
+13. **Fencing in production**: a two-node cluster cannot exclude a double active under a symmetric partition without it. Strongly recommended wherever an IPMI or a smart PDU exists.
+14. **Warm standby / fast takeover** (`docs/fast-ha.md`): only after the hardware measurements show that the link renegotiation is the dominant cost.
+15. **Standby readiness state** (config in sync, versions equal, pfsync up, ruleset loaded) used to warn before a failover; the building block of item 14.
+16. Epoch on configuration pushes and a nonce on the peer API (defence in depth; the pinned TLS identity already limits both to the peer).

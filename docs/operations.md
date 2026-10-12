@@ -16,7 +16,7 @@
 | Standby cannot prove it is not the isolated node (its management/HA carrier is down) | **no** automatic promotion; event "held back"; promote manually if the peer is really down |
 | Both nodes up, nobody active (cold start) | the primary promotes about 5 s after the daemons start, the secondary only after about 30 s |
 | A node reboots | always boots as standby, then follows the rules above; failback is manual unless *preemption* is on |
-| Both nodes active (split-brain) | higher epoch wins (tie: primary); the other demotes within about a second |
+| Both nodes active (split-brain) | higher epoch wins (tie: primary); the other demotes as soon as two heartbeats confirm it (about 1 s), also in maintenance mode and with automatic failover off |
 | Configuration saved on the active node | pushed as a numbered revision within about a second; the standby merges, reloads pf only, acknowledges; on any error it rolls back and shows the error |
 | Standby without WAN | plugin installs go through a restricted proxy on the active node; the standby clock follows the active node |
 
@@ -78,6 +78,8 @@ Settings tab (some under *advanced*):
 | *Waiting for the second firewall* never ends | HA cable and addresses; the plugin installed and enabled on the second node; the kit file restored on it; firewall rule on the HA link; Pre-flight on the primary |
 | Pairing refused with a list of differences | OPNsense version, kernel, NIC names and plugin versions must match |
 | *peer silent but automatic promotion held back* | this node cannot prove it is not the isolated one: fix its HA/management link, or promote manually if the peer is down |
+| Failover error *the peer did not confirm the takeover ... stays standby on purpose* | the answer of the peer was lost and its state could not be verified; the old node deliberately did not take the role back (it could create two active nodes). Check the peer (`hasyncd ctl status` on it): if it is active, nothing to do; if nobody is active, promote one node manually |
+| Status shows *degraded*, *pfsync_problem* or *package_diff* | degraded: the node is active but something failed during the takeover (read the event log); pfsync: states are not being replicated, sessions may not survive a failover; package_diff: the nodes have different plugins (nothing is removed automatically) |
 | Sync *behind*/*failed* | read the error in Status; *Full resync*; versions must match |
 | After failover traffic fails on Hyper-V or other virtual NICs | enable *Promiscuous mode on data interfaces*; use virtual (locally administered) MACs |
 | Still asked to log in after a failover | *Keep GUI logins across a failover* must be on, on the active node, and the nodes must serve the same certificate (it is part of the replicated configuration) |

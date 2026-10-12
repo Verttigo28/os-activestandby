@@ -17,7 +17,7 @@ import (
 )
 
 // version is set at build time (-ldflags "-X main.version=...") by CI and build/build.ps1.
-var version = "0.6.0"
+var version = "0.7.0"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`
@@ -74,6 +74,12 @@ type Daemon struct {
 	drift         *driftState
 	leases        *leaseState
 	upd           *updateRun
+	act           *actions     // test seams (nil: the real system)
+	tx            txLog        // transition ids handled by /v1/promote and /v1/abort
+	failing       atomic.Bool  // a graceful failover started here is in progress
+	degraded      atomic.Value // string: why the last promotion left this node degraded (empty: healthy)
+	pfsyncProblem atomic.Value // string: why pfsync is not in place (empty: as configured)
+	pkgReport     atomic.Value // string: how the plugin set of this standby differs from the active node (empty: conform)
 }
 
 func loadConfig() Config {
@@ -173,6 +179,7 @@ func runDaemon() error {
 	d.ensureConfigLock()
 	go d.syncLoop()
 	go d.pfsyncSetup()
+	go d.pfsyncLoop()
 	go d.autoLoop()
 	go d.healthLoop()
 	go d.driftLoop()
@@ -201,6 +208,7 @@ func (d *Daemon) peerMux() *http.ServeMux {
 	mux.HandleFunc("/v1/config", d.post(d.paired(d.handleConfig)))
 	mux.HandleFunc("/v1/hb", d.post(d.paired(d.handleHB)))
 	mux.HandleFunc("/v1/promote", d.post(d.paired(d.handlePromote)))
+	mux.HandleFunc("/v1/abort", d.post(d.paired(d.handleAbort)))
 	mux.HandleFunc("/v1/handover", d.post(d.paired(d.handleHandover)))
 	mux.HandleFunc("/v1/break", d.post(d.paired(d.handlePeerBreak)))
 	mux.HandleFunc("/v1/maintenance", d.post(d.paired(d.handleMaintenance)))

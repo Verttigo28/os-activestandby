@@ -33,8 +33,22 @@ type autoState struct {
 	lastChange      time.Time
 	peerActiveSince time.Time    // preemption: how long the peer has been active, alive and healthy
 	peerBusySince   time.Time    // the peer has been promoting/demoting since
+	dualBusySince   time.Time    // both nodes active, but the peer reports a transition in progress since
+	lastSBTry       time.Time    // last split-brain demotion attempt (retry throttle)
 	blocked         atomic.Value // string: why automatic promotion is currently held back
+	holdUntil       atomicTime   // no election of this node until then (the peer is taking its role back after an aborted hand-over)
+	detectMs        atomic.Int64 // silence of the peer when the automatic promotion was decided (for the history)
 }
+
+// Split-brain resolution timing. It is deliberately NOT subject to minHold (anti-flapping): two active nodes are an
+// emergency, not a role change that may be damped.
+const (
+	sbBusyMax = time.Minute     // a peer "busy" this long no longer excuses a double active
+	sbRetry   = 2 * time.Second // between two attempts to stand down
+)
+
+// carrier reports the link state of a device; replaced in the tests.
+var carrier = carrierUp
 
 func (a *autoState) setBlocked(s string) { a.blocked.Store(s) }
 func (a *autoState) Blocked() string {
@@ -63,8 +77,8 @@ func (d *Daemon) autoLoop() {
 
 func (d *Daemon) autoStep() {
 	st := d.store.Get()
-	if st.PeerFP == "" || (st.State != StateActive && st.State != StateStandby) || !d.cfg.autoOn() {
-		d.auto.noActiveSince, d.auto.dualSince = time.Time{}, time.Time{}
+	if st.PeerFP == "" || (st.State != StateActive && st.State != StateStandby) {
+		d.auto.noActiveSince, d.auto.dualSince, d.auto.dualBusySince = time.Time{}, time.Time{}, time.Time{}
 		d.auto.setBlocked("")
 		return
 	}
@@ -72,37 +86,28 @@ func (d *Daemon) autoStep() {
 		return
 	}
 	d.ops.mu.Unlock()
-	if time.Since(d.auto.lastChange) < minHold {
+	alive, _, peer := d.hb.Snapshot()
+
+	// A double active is resolved first and always: whatever the anti-flapping hold (minHold), the maintenance mode or the
+	// "automatic failover" switch say. Standing down never makes the cluster less safe.
+	if st.State == StateActive {
+		d.auto.setBlocked("")
+		d.splitBrainStep(st, alive, peer)
 		return
 	}
-	alive, _, peer := d.hb.Snapshot()
-	maint := d.maintenanceOn() // pauses everything below except split-brain resolution
+	d.auto.dualSince, d.auto.dualBusySince = time.Time{}, time.Time{}
+	if !d.cfg.autoOn() {
+		d.auto.noActiveSince = time.Time{}
+		d.auto.setBlocked("")
+		return
+	}
+	if time.Since(d.auto.lastChange) < minHold || d.failing.Load() {
+		return
+	}
+	maint := d.maintenanceOn() // pauses everything below
 
 	switch st.State {
-	case StateActive:
-		d.auto.setBlocked("")
-		if alive && peer.State == StateActive && !peer.Busy {
-			if d.auto.dualSince.IsZero() {
-				d.auto.dualSince = time.Now()
-				d.event("error", "SPLIT-BRAIN: both nodes active (my epoch %d, peer %d)", st.Epoch, peer.Epoch)
-				log.Printf("SPLIT-BRAIN detected: both nodes active (my epoch %d, peer %d)", st.Epoch, peer.Epoch)
-			}
-			if time.Since(d.auto.dualSince) < time.Second {
-				return
-			}
-			loser := st.Epoch < peer.Epoch || (st.Epoch == peer.Epoch && st.Role != RoleMaster)
-			if loser {
-				d.auto.lastChange = time.Now()
-				if err := d.demote("split-brain: peer wins (higher epoch or master role)"); err != nil {
-					log.Printf("split-brain demote failed: %v", err)
-				}
-			}
-		} else {
-			d.auto.dualSince = time.Time{}
-		}
-
 	case StateStandby:
-		d.auto.dualSince = time.Time{}
 		if maint {
 			d.auto.noActiveSince, d.auto.peerActiveSince = time.Time{}, time.Time{}
 			d.auto.setBlocked("")
@@ -137,6 +142,9 @@ func (d *Daemon) autoStep() {
 			if st.Role == RoleMaster {
 				wait = electionMaster
 			}
+			if time.Now().Before(d.auto.holdUntil.Get()) {
+				return // the peer cancelled a hand-over and is taking its role back: do not race it
+			}
 			if time.Since(d.auto.noActiveSince) >= wait {
 				d.autoPromote("election: no active node, "+st.Role+" role", false)
 			}
@@ -155,8 +163,8 @@ func (d *Daemon) autoStep() {
 		if d.hb.silentFor() < need {
 			return
 		}
-		mgmtOK := d.mgmtAddr() != "" && carrierUp(d.cfg.MgmtDevice) && d.mgmtProbe() != "fail"
-		haOK := carrierUp(d.cfg.HADevice)
+		mgmtOK := d.mgmtAddr() != "" && carrier(d.cfg.MgmtDevice) && d.mgmtProbe() != "fail"
+		haOK := carrier(d.cfg.HADevice)
 		switch {
 		case mgmtOK:
 			// both paths silent while our management network is healthy: the peer is down
@@ -182,6 +190,9 @@ func (d *Daemon) autoPromote(reason string, fence bool) {
 	d.auto.lastChange = time.Now()
 	d.auto.noActiveSince = time.Time{}
 	d.auto.setBlocked("")
+	if fence {
+		d.auto.detectMs.Store(d.hb.silentFor().Milliseconds())
+	}
 	if fence && d.cfg.FenceCommand != "" {
 		d.event("warning", "fencing the peer before promoting (%s)", d.cfg.FenceCommand)
 		if err := d.runFence(); err != nil {
@@ -190,7 +201,7 @@ func (d *Daemon) autoPromote(reason string, fence bool) {
 			return
 		}
 	}
-	if err := d.promote("AUTO: " + reason); err != nil {
+	if err := d.doPromote("AUTO: " + reason); err != nil {
 		log.Printf("automatic promote failed: %v", err)
 		d.auto.setBlocked("automatic promote failed: " + err.Error())
 		// stay standby, never leave half-configured interfaces up
@@ -198,5 +209,48 @@ func (d *Daemon) autoPromote(reason string, fence bool) {
 		d.ops.cache = IfaceSet{}
 		d.enforceOnce()
 		d.ops.mu.Unlock()
+	}
+}
+
+// splitBrainStep: this node is active. If the peer is active too, the loser (lower epoch, on a tie the secondary) stands
+// down. A peer that reports a transition in progress gets a limited grace period: a graceful failover legitimately
+// overlaps for a moment, a promote or demote stuck for a minute does not.
+func (d *Daemon) splitBrainStep(st State, alive bool, peer hbMsg) {
+	if !alive || peer.State != StateActive {
+		d.auto.dualSince, d.auto.dualBusySince = time.Time{}, time.Time{}
+		return
+	}
+	if peer.Busy {
+		if d.auto.dualBusySince.IsZero() {
+			d.auto.dualBusySince = time.Now()
+		}
+		if time.Since(d.auto.dualBusySince) < sbBusyMax {
+			d.auto.dualSince = time.Time{}
+			return
+		}
+	} else {
+		d.auto.dualBusySince = time.Time{}
+	}
+	if d.auto.dualSince.IsZero() {
+		d.auto.dualSince = time.Now()
+		d.event("error", "SPLIT-BRAIN: both nodes active (my epoch %d, peer %d)", st.Epoch, peer.Epoch)
+		log.Printf("SPLIT-BRAIN detected: both nodes active (my epoch %d, peer %d)", st.Epoch, peer.Epoch)
+	}
+	// two consecutive heartbeats must agree before acting: one stale packet from before a hand-over is not a conflict
+	confirm := 2 * hbInterval
+	if confirm < 300*time.Millisecond {
+		confirm = 300 * time.Millisecond
+	}
+	if time.Since(d.auto.dualSince) < confirm {
+		return
+	}
+	loser := st.Epoch < peer.Epoch || (st.Epoch == peer.Epoch && st.Role != RoleMaster)
+	if !loser || time.Since(d.auto.lastSBTry) < sbRetry {
+		return
+	}
+	d.auto.lastSBTry = time.Now()
+	d.auto.lastChange = time.Now()
+	if err := d.doDemote("split-brain: peer wins (higher epoch or master role)", nil); err != nil {
+		d.event("error", "split-brain: standing down failed: %v (retrying)", err)
 	}
 }

@@ -14,10 +14,12 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	d.ops.mu.Lock()
 	defer d.ops.mu.Unlock()
 	t0 := time.Now()
+	ph := &phaseLog{t0: t0}
 	log.Printf("PROMOTE (%s)", reason)
 	if d.store.Get().State == StateActive {
 		return nil
 	}
+	d.degraded.Store("")
 	full := activeXML(d.store.dir)
 	if !activeValid(d.store.dir) {
 		return fmt.Errorf("active.xml is missing or damaged, cannot promote (waiting for a full resync from the active node)")
@@ -46,7 +48,7 @@ func (d *Daemon) promote(reason string) (retErr error) {
 			d.enforceOnce()
 		}
 	}()
-	step(t0, "full config restored")
+	ph.mark("full config restored")
 	set, err := loadIfaces(full)
 	if err != nil {
 		return err
@@ -74,7 +76,7 @@ func (d *Daemon) promote(reason string) (retErr error) {
 			sh("ifconfig", dev, "up")
 		}
 	}
-	step(t0, "virtual devices ready")
+	ph.mark("virtual devices ready")
 	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 	var firstErr error
 	// each interface costs a fraction of a second of mostly waiting; independent ones are configured at the same time,
@@ -111,8 +113,9 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	}
 	if out, err := sh(reconfScript, "routes"); err != nil {
 		log.Printf("promote: routes: %v: %s", err, out)
+		d.markDegraded("static routes could not be restored (%v): %s", err, out)
 	}
-	step(t0, "interfaces reconfigured")
+	ph.mark("interfaces reconfigured")
 	if firstErr != nil {
 		return firstErr
 	}
@@ -135,12 +138,12 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		}
 	}
 	waitCarrier(enabled, 8*time.Second)
-	step(t0, "links up")
+	ph.mark("links up")
 	// gratuitous ARP first, right after the links are up so the switch and neighbours relearn the port
 	for _, i := range enabled {
 		announce(i.Dev)
 	}
-	step(t0, "gratuitous ARP sent")
+	ph.mark("gratuitous ARP sent")
 	// pf and the services do not depend on each other: run them side by side
 	var wg sync.WaitGroup
 	run := func(c ...string) {
@@ -152,11 +155,26 @@ func (d *Daemon) promote(reason string) (retErr error) {
 			log.Printf("  %v: %dms err=%v out=%q", c, time.Since(t1).Milliseconds(), err, out)
 		}()
 	}
-	run("configctl", "filter", "reload")
+	var pfErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		pfErr = reloadFilter()
+	}()
 	for _, c := range haStart {
 		run(c...)
 	}
 	wg.Wait()
+	// "the command ran" is not "the firewall is working": the interfaces are up and carry traffic by now, so a node whose
+	// ruleset could not be loaded must not stay in this state. Returning the error puts the standby view back and the
+	// interfaces down (deferred cleanup above), and the node reports the failure instead of a false ACTIVE.
+	if pfErr != nil {
+		for _, c := range haStop { // what the parallel start brought up must not keep running on a node that stays standby
+			sh(c[0], c[1:]...)
+		}
+		d.event("error", "promotion aborted, the packet filter is not working: %v", pfErr)
+		return fmt.Errorf("packet filter: %w", pfErr)
+	}
 	// DHCP and DNS restart once (not once per interface) and re-read the lease files replicated from the old active node.
 	// Nothing waits for it (traffic already flows), but a demote does, so it cannot restart them after the node went standby.
 	d.ops.bg.Add(1)
@@ -167,7 +185,7 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		log.Printf("  dhcp+dns restart: %dms err=%v out=%q", time.Since(t1).Milliseconds(), err, out)
 		restartBoundServices()
 	}()
-	step(t0, "pf reloaded, services started")
+	ph.mark("pf reloaded, services started")
 	d.event("change", "promoted to ACTIVE (%s) in %d ms", reason, time.Since(t0).Milliseconds())
 	err = d.store.Update(func(s *State) {
 		_, _, pe := d.hb.Snapshot()
@@ -178,11 +196,11 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		s.Epoch++
 		s.AckedSHA = "" // the new active node pushes its full config to the new standby, so both sides converge
 	})
-	d.hist.add(HistoryEntry{Type: "promote", Reason: reason, DurationMs: time.Since(t0).Milliseconds(), Epoch: d.store.Get().Epoch})
+	d.hist.add(HistoryEntry{Type: "promote", Reason: reason, DurationMs: time.Since(t0).Milliseconds(), Epoch: d.store.Get().Epoch, Phases: ph.list(), DetectMs: d.auto.detectMs.Swap(0)})
 	d.leases.reset()
 	d.drift.reason.Store("")
 	d.health.startGrace()
-	step(t0, "ACTIVE")
+	ph.mark("ACTIVE")
 	return err
 }
 

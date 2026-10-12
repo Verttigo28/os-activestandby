@@ -88,3 +88,23 @@ What was tested, how, and what still needs hardware. **PASS** = verified in the 
 | 54 | Upgrade job robustness: round 2 waits up to a minute for the old node to finish its demote; a handed-over job no longer blocks the next upgrade on the original node | PASS (lab) | Found by review; guided upgrade with failback ran end to end twice. |
 | 55 | GUI sessions replicate to the standby, logouts are mirrored, local standby sessions untouched | PASS (files) | Unit tests and a lab check with synthetic session files (copy within 2 s, 0600 root, removed again after deletion on the active node). A real browser login surviving a failover still has to be confirmed by hand. |
 | 56 | Races removed (lock-free timestamps), `go test -race` in CI | built | Race detector runs in CI (needs cgo, not available on the lab workstation). |
+
+## G. Failover safety (0.7.0): procedure for two OPNsense nodes
+
+Unit tests with fakes cover the decision logic (`docs/audit.md`). The following must be run on two real or virtual OPNsense nodes before relying on the new behaviour. Never run them against a production pair. Use a client behind the cluster and `lab/failover-bench.sh` (several runs, keep median, P95 and maximum), and watch `hasyncd ctl status`, `hasyncd ctl events` and `hasyncd ctl history` on both nodes.
+
+| # | Scenario | How | Expected |
+|---|---|---|---|
+| G1 | Graceful failover | `hasyncd ctl failover` on the active node, both directions | one node active at the end; no gratuitous overlap seen on the client; history shows the phases |
+| G2 | Lost answer to "promote" | start a failover and, for the first 3 s only, drop the HA traffic from the peer to the active node (a temporary pf rule on the peer or a switch ACL, removed by a timer), so the peer receives the request and promotes but its answer is lost | the old node does **not** become active again while the peer is active; event "no confirmation from the peer"; after the peer answers, one active node |
+| G3 | Lost request | drop HA traffic towards the peer before a failover | failover reports an error; the peer confirmed it never started; the old node is active again; no second active node |
+| G4 | Peer unreachable during the check | cut the HA link and the management path right after the failover starts | the old node stays standby and says why; the standby side promotes by the usual rules (silent peer, isolation guard, fencing) |
+| G5 | Split-brain, immediate | with `auto_failover` off, force both nodes active (`hasyncd ctl promote --force=true` on the standby) | the loser demotes within about two heartbeat intervals, also in maintenance mode, also with automatic failover off |
+| G6 | pf failure on promotion | on the standby break the ruleset (for example a syntax error in a rule file used by `configctl filter reload`) and fail over | the promotion fails with "packet filter", the standby stays silent (interfaces down), the old node takes its role back after the confirmation |
+| G7 | pfsync | on a node run `ifconfig pfsync0 -syncdev` | within 10 s `pfsync_problem` appears, the daemon repairs it, an event records both |
+| G8 | Plugin versions | install a plugin on the standby only, or at another version | `package_diff` shows it; nothing is uninstalled automatically |
+| G9 | Reboot during a failover | reboot the new active node while promoting | it comes back as standby; the other node follows the election rules; never two active nodes |
+| G10 | Loss and latency | `dummynet` or a switch impairing 30-50 % loss for less than the detection time, then more than it | no failover for the short loss; failover after the detection time |
+| G11 | Returning node | power the old active node off for an hour, power it on | it boots silent, becomes standby, does not take the role back (unless preemption is on) |
+
+Not covered by software or by these steps: partitions that cut both paths between the nodes while both see their own carrier (needs fencing), switch MAC-table behaviour, link-up time of real NICs (see `docs/fast-ha.md`).

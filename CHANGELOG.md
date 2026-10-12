@@ -2,6 +2,21 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 0.7.0
+Failover safety release (audit in `docs/audit.md`).
+
+### Safety fixes (behaviour changes)
+- **No more rollback on a lost answer.** A graceful failover used to take its role back whenever the peer's reply to "promote" failed, which created two active nodes if the peer had in fact promoted. Hand-overs now carry a transition id and the sender's epoch; the old node takes its role back only after the peer confirmed that it did not and now cannot take over. If the outcome cannot be verified the old node stays standby and reports an error (nothing serves traffic until the election, the "peer lost" rule or an operator decides). The peer refuses stale, duplicated and cancelled promote requests. Peer API: new `POST /v1/abort`; `/v1/promote` takes `tid` and `epoch` (older daemons simply ignore them).
+- **Split-brain is resolved immediately.** It is no longer delayed by the 10 s anti-flapping hold, and it is also resolved while maintenance mode is on or **automatic failover is switched off** (a double active is never wanted). A peer that reports "busy" is excused for at most one minute.
+- **A promotion is not reported as done when pf is not working.** The ruleset reload is retried and verified (`pfctl -si`); on failure the node goes back to its standby view and reports the error instead of staying "active" without a firewall. Failed static routes mark the node *degraded*.
+
+### Supervision
+- Status: `degraded`, `pfsync_problem`, `package_diff`, `failover_in_progress`, shown in the status page banner. pfsync is verified every 10 s and repaired when missing; plugin differences between the nodes (missing, other version, extra) are reported.
+- History: every promotion records its phases and, for automatic ones, how long the peer had been silent.
+
+### Tests and docs
+- New failover/election/split-brain tests with a fake system and a lossy peer link; `docs/audit.md` (findings, limits of two-node clusters), `docs/fast-ha.md` (analysis of the failover time and the design of a warm standby, not built), validation section G, `lab/failover-bench.sh`.
+
 ## 0.6.0
 Production-readiness and usability release (review of every feature, setting and screen).
 

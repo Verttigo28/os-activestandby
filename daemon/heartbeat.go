@@ -227,20 +227,6 @@ func (d *Daemon) peerCall(path string, timeout time.Duration) (map[string]any, e
 	return out, nil
 }
 
-// handlePromote: the active peer asks us (standby) to take over after it demoted itself.
-func (d *Daemon) handlePromote(w http.ResponseWriter, r *http.Request) {
-	if d.store.Get().State == StateActive {
-		writeJSON(w, 409, map[string]string{"error": "already active"})
-		return
-	}
-	t0 := time.Now()
-	if err := d.promote("peer request"); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, 200, map[string]any{"status": "active", "ms": time.Since(t0).Milliseconds()})
-}
-
 // handleHandover: the standby asks us (active) to hand over: we demote, then ask it to promote.
 func (d *Daemon) handleHandover(w http.ResponseWriter, r *http.Request) {
 	msg, err := d.failover(r.URL.Query().Get("force") == "1")
@@ -252,16 +238,20 @@ func (d *Daemon) handleHandover(w http.ResponseWriter, r *http.Request) {
 }
 
 // failover performs a graceful switchover. Order matters: demote first so the two nodes are never
-// active together, then let the peer promote; if the peer fails we take the role back.
+// active together, then let the peer promote. If the answer of the peer is lost, this node takes its role back ONLY when the
+// peer has confirmed (see transition.go) that it did not and now cannot take over; on any doubt it stays standby: no
+// service for a moment is better than the same IP/MAC on two nodes.
 func (d *Daemon) failover(force bool) (string, error) {
 	d.failMu.Lock()
 	defer d.failMu.Unlock()
+	d.failing.Store(true)
+	defer d.failing.Store(false)
 	st := d.store.Get()
 	if st.PeerFP == "" {
 		return "", errors.New("not paired")
 	}
 	if st.State != StateActive {
-		if _, err := d.peerCall(map[bool]string{true: "/v1/handover?force=1", false: "/v1/handover"}[force], 90*time.Second); err != nil {
+		if _, err := d.callPeer(map[bool]string{true: "/v1/handover?force=1", false: "/v1/handover"}[force], 90*time.Second); err != nil {
 			return "", fmt.Errorf("handover request to active peer failed: %w", err)
 		}
 		return "peer handed over, this node is now active", nil
@@ -283,44 +273,57 @@ func (d *Daemon) failover(force bool) (string, error) {
 		return "", fmt.Errorf("peer state is %q, expected standby", peer.State)
 	}
 	t0 := time.Now()
+	tid := newTID()
 	// the peer is told to promote as soon as our interfaces are down, while we finish tidying up
 	var perr error
 	done := make(chan struct{})
 	fired := false
-	derr := d.demoteHook("failover", func() {
+	derr := d.doDemote("failover "+tid[:8], func() {
 		fired = true
 		go func() {
-			_, perr = d.peerCall("/v1/promote", 90*time.Second)
+			_, perr = d.callPeer(fmt.Sprintf("/v1/promote?tid=%s&epoch=%d", tid, st.Epoch), 90*time.Second)
 			close(done)
 		}()
 	})
-	if fired {
-		<-done
-		// the peer answering "already active" means the switchover had already happened
-		if perr != nil && strings.Contains(perr.Error(), "already active") {
-			perr = nil
+	if !fired {
+		// nothing was asked of the peer: it stays what it was
+		if derr == nil {
+			derr = errors.New("demote did not complete")
 		}
+		return "", fmt.Errorf("demote failed: %w", derr)
 	}
+	<-done
+	// the peer answering "already active" means the switchover had already happened
+	if perr != nil && strings.Contains(perr.Error(), "already active") {
+		perr = nil
+	}
+	// from here on our data interfaces are down: whatever the cleanup said, we are not serving
 	if derr != nil {
-		if fired && perr == nil {
-			// our interfaces are down and the peer is active: we are the standby whatever the cleanup said
-			d.store.Update(func(s *State) { s.State = StateStandby })
+		d.store.Update(func(s *State) { s.State = StateStandby })
+	}
+	if perr == nil {
+		if derr != nil {
 			d.event("warning", "demote cleanup failed after the peer took over: %v", derr)
 			return "switched over, but the cleanup on this node failed (see events)", nil
 		}
-		if !fired {
-			return "", fmt.Errorf("demote failed: %w", derr)
-		}
+		return fmt.Sprintf("switched over in %d ms (this node is now standby)", time.Since(t0).Milliseconds()), nil
 	}
-	if perr != nil || !fired {
-		err := perr
-		if err == nil {
-			err = errors.New("demote did not complete")
-		}
-		rb := d.promote("failover rollback")
-		return "", fmt.Errorf("peer did not take over (%v); rolled back (rollback error: %v)", err, rb)
+
+	// no usable answer: ask the peer what became of the transition instead of guessing
+	d.event("warning", "failover %s: no confirmation from the peer (%v); checking what the peer did", tid[:8], perr)
+	outcome, detail := d.resolveTransition(tid)
+	switch outcome {
+	case outcomePeerActive:
+		d.event("change", "failover %s: the peer is active (%s); this node stays standby", tid[:8], detail)
+		return fmt.Sprintf("switched over in %d ms (the peer's answer was lost but it is active; this node is now standby)", time.Since(t0).Milliseconds()), nil
+	case outcomePeerStandby:
+		rb := d.doPromote("failover rollback " + tid[:8] + ": the peer confirmed it did not take over")
+		d.event("warning", "failover %s: peer did not take over (%v; %s); rolled back (%v)", tid[:8], perr, detail, rb)
+		return "", fmt.Errorf("peer did not take over (%v); this node took its role back after the peer confirmed it will not become active (rollback error: %v)", perr, rb)
+	default:
+		d.event("error", "failover %s: the outcome on the peer is unknown (%s). This node stays STANDBY and does not roll back, so the same addresses can never be active on both nodes. If no node serves traffic, check the peer, then promote one node manually", tid[:8], detail)
+		return "", fmt.Errorf("the peer did not confirm the takeover (%v) and its state could not be verified (%s): this node stays standby on purpose to avoid two active nodes; check the peer, then promote one node manually", perr, detail)
 	}
-	return fmt.Sprintf("switched over in %d ms (this node is now standby)", time.Since(t0).Milliseconds()), nil
 }
 
 // peerWantsResync: a standby whose saved config is damaged asks us (active) for a full push.

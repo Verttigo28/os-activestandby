@@ -58,6 +58,8 @@ Details: [getting started](docs/getting-started.md), [operations](docs/operation
 | [Architecture](docs/architecture.md) | roles and state, failover pipeline, replication, design decisions |
 | [Security](docs/security.md) | threat model, controls, hardening, reporting vulnerabilities |
 | [Validation](docs/validation.md) | what was tested, how, and what still needs hardware |
+| [Audit](docs/audit.md) | failover safety audit: findings, fixes, the limits of a two-node cluster |
+| [Fast HA](docs/fast-ha.md) | where the failover time goes, design of a warm standby (not built) |
 | [Building](docs/building.md) | build, CI, releases |
 | [Roadmap](docs/roadmap.md) | what is open |
 | [Changelog](CHANGELOG.md) | release history |

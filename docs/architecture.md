@@ -43,11 +43,22 @@ One code path serves manual failover, health switches, preemption and the upgrad
 3. The peer restores the full config, makes sure the virtual devices (VLAN, LAGG, ...) exist (they normally already do), configures the interfaces tier by tier in parallel (NICs, then LAGG, VLAN, bridges/tunnels), sets routes, sends a gratuitous ARP, then reloads pf and starts services side by side. DHCP/DNS restart afterwards in the background.
 4. The new epoch is persisted, and the new active node pushes its complete configuration so both sides converge.
 
-If the peer fails to take over, the old node rolls back and becomes active again. A node never elects itself while the peer reports (heartbeat `busy` flag) that it is promoting.
+Every hand-over carries a unique transition id and the sender's epoch. The peer executes a given id at most once (a duplicate is acknowledged, not re-executed), refuses a request from an older epoch, and refuses an id the sender cancelled. If the answer to the promote request is lost, the old node does **not** guess: it asks the peer (`/v1/abort`) what became of the id. The peer answers atomically with its role:
+
+| Peer's answer | What the old node does |
+|---|---|
+| peer is active | stays standby: the hand-over worked, only the answer was lost |
+| id cancelled (never started, now can never start) or failed, peer is standby | rolls back and becomes active again |
+| id still running | keeps asking (up to 45 s) |
+| no answer, or anything else | **stays standby** and reports an error; nobody serves until the election (peer alive, nobody active) or the "peer lost" rule (peer silent, fencing) or an operator decides |
+
+While it cancels an id, the peer also holds back its own election for 45 s so the two cannot race. A node never elects itself while the peer reports (heartbeat `busy` flag) that it is promoting, and automatic promotion is paused on a node that is orchestrating a failover itself.
+
+A promotion is only reported as done when the packet filter is verified: if the ruleset could not be loaded or `pf` is not enabled, the promotion fails, the node returns to its standby view and the interfaces go down again (a failed promotion never leaves routed traffic without a firewall). Smaller failures (static routes) leave the node active but flagged *degraded* in the status and the event log.
 
 ## Split-brain
 
-Every promotion increments an epoch. If two nodes are ever active together, the higher epoch wins (tie: primary) and the loser demotes itself within about a second. Pairing, the boot sequence, the isolation guard and the optional fencing hook exist so that this stays a rare, self-healing event.
+Every promotion increments an epoch. If two nodes are ever active together, the higher epoch wins (tie: primary) and the loser demotes itself as soon as two consecutive heartbeats confirm the conflict (twice the heartbeat interval: 0.75 s with the default 3 s detection time). This resolution is **not** subject to the anti-flapping hold, to maintenance mode or to the "automatic failover" switch: standing down never makes the cluster less safe. A peer that reports a transition in progress is excused for at most one minute, and a failing stand-down is retried every 2 s. Pairing, the boot sequence, the isolation guard and the optional fencing hook exist so that this stays a rare, self-healing event.
 
 ## Replication
 

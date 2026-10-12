@@ -34,7 +34,7 @@ func writeFileDurable(path string, data []byte, perm os.FileMode) error {
 }
 
 func syncDir(dir string) error {
-	if runtime.GOOS == "windows" { // directories cannot be fsynced there; dev/test only
+	if runtime.GOOS == "windows" || runtime.GOOS == "js" { // directories cannot be fsynced there (nor under the wasm test runner); dev/test only
 		return nil
 	}
 	d, err := os.Open(dir)

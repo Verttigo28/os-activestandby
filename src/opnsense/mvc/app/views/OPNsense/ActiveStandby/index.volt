@@ -101,7 +101,7 @@
             else { setTile('tSync', 'bad', '{{ lang._('FAILED') }}', y.error || ''); }
             if (s.maintenance) { setTile('tProt', 'warn', '{{ lang._('Paused') }}', '{{ lang._('maintenance mode') }}'); }
             else if (!s.auto_failover) { setTile('tProt', 'warn', '{{ lang._('Manual only') }}', '{{ lang._('automatic failover is off') }}'); }
-            else if (s.health || s.drift || s.auto_blocked) { setTile('tProt', 'warn', '{{ lang._('Attention') }}', s.health || s.drift || s.auto_blocked); }
+            else if (s.degraded || s.health || s.drift || s.auto_blocked) { setTile('tProt', 'warn', '{{ lang._('Attention') }}', s.degraded || s.health || s.drift || s.auto_blocked); }
             else { setTile('tProt', 'ok', '{{ lang._('Ready') }}', (s.preempt ? '{{ lang._('automatic failover + preemption') }}' : '{{ lang._('automatic failover') }}') + (s.fencing ? ' · {{ lang._('fencing') }}' : '')); }
             $('#peerDownBox').toggle(standby && !s.peer_alive);
         }
@@ -199,8 +199,11 @@
                 $('#bannerLost').toggle(!!s.state_lost);
                 $('#bannerMaint').toggle(!!s.maintenance);
                 const problems = [];
+                if (s.degraded) { problems.push('{{ lang._('Active but degraded') }}: ' + s.degraded); }
                 if (s.health) { problems.push('{{ lang._('Health problem on the active node') }}: ' + s.health); }
                 if (s.drift) { problems.push('{{ lang._('Configuration drift') }}: ' + s.drift); }
+                if (s.pfsync_problem) { problems.push('{{ lang._('State synchronisation (pfsync)') }}: ' + s.pfsync_problem); }
+                if (s.package_diff) { problems.push(s.package_diff); }
                 if (s.auto_blocked) { problems.push(s.auto_blocked); }
                 $('#bannerProblem').html(problems.map(p => '<div>' + esc(p) + '</div>').join('')).toggle(problems.length > 0);
                 $('#bannerVersion').toggle(!!s.version_mismatch);
