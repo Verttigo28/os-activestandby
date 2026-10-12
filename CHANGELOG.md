@@ -2,8 +2,11 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 0.8.2
+Release pipeline fix: publishing the signed pkg repository to `gh-pages` failed because the publish step listed `.git` in `exclude_assets`, which the action applies to its own clone of the branch (it deleted the repository it had just cloned). No daemon or plugin change.
+
 ## 0.8.1
-Release pipeline fix: publishing the signed pkg repository to `gh-pages` failed because the workspace came back from the FreeBSD VM without its `.git`; the job now re-creates it when missing. No daemon or plugin change.
+Superseded by 0.8.2 (the attempted fix was not the cause).
 
 ## 0.8.0
 Warm standby (experimental, opt-in; see `docs/fast-ha.md`).
