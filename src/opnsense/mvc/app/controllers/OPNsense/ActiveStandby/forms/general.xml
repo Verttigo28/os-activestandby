@@ -120,6 +120,12 @@
         <help>Shared interfaces get a generated MAC address (02:...) instead of the primary's hardware address, so replacing a firewall never changes what the network sees. Applies to interfaces when they are first shared (pairing or kit); addresses already pinned stay as they are.</help>
     </field>
     <field>
+        <id>activestandby.general.ha_mode</id>
+        <label>Standby mode</label>
+        <type>dropdown</type>
+        <help>Classic: the standby keeps its data interfaces down; a takeover brings the links up (a real NIC needs seconds to renegotiate). Warm (experimental): the standby keeps the links of its shared interfaces up with its own MAC address, no IP address and IPv6 off, and takes the shared MAC and addresses at takeover. Only interfaces with a static IPv4 address, a shared MAC and a plain NIC or VLAN qualify; the others keep the classic takeover, and any problem falls back to it. Needs a switch that accepts two MAC addresses on the port group and a NIC driver that changes its MAC without dropping the link: validate on your hardware first (docs/fast-ha.md). Copied from the active firewall: it is the same on both.</help>
+    </field>
+    <field>
         <id>activestandby.general.force_promisc</id>
         <label>Promiscuous mode on data interfaces</label>
         <type>checkbox</type>

@@ -22,6 +22,12 @@
 
 Real NICs add link-up time (typically 1-3 s for copper) that the lab cannot show.
 
+## Warm standby (experimental)
+
+Setting *Standby mode* (shared, default *Classic*). In *Warm standby* the standby keeps the links of its eligible shared interfaces up, with its own MAC address, no IP address and IPv6 off, so a takeover does not wait for a link to come up. Read [warm standby](fast-ha.md) first: it has never run on hardware, needs a switch and NIC drivers that accept the MAC change, and falls back to the classic takeover for interfaces that do not qualify and whenever anything looks wrong.
+
+Check *Pre-flight* after switching it on: the standby must report *ready*, and the interfaces that keep the classic takeover are listed with the reason. To go back, set the mode to *Classic*; the standby takes the warm ports down again within a few seconds.
+
 ## Maintenance mode
 
 **Operations > Maintenance mode** pauses automatic failover, preemption and health-driven switching on both nodes for 1-24 h chosen in the GUI (default 4 h, it switches itself off; the console and API accept up to 72 h). Split-brain protection stays on. Use it for planned work.

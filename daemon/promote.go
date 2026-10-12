@@ -79,6 +79,19 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	ph.mark("virtual devices ready")
 	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 	var firstErr error
+	// warm standby: the eligible interfaces take the shared identity natively (MAC, addresses); the others, and everything
+	// if this fails or the standby was not ready, go through the classic path below
+	warmDone := map[string]bool{}
+	if p, perr := d.warmPlanFor(full); perr != nil {
+		log.Printf("promote: warm plan: %v", perr)
+	} else if p != nil {
+		if done, werr := d.warmActivate(p, set); werr != nil {
+			d.event("warning", "warm takeover not possible (%v): using the classic takeover", werr)
+		} else {
+			warmDone = done
+			ph.mark(fmt.Sprintf("shared identity taken natively on %d interface(s) (warm standby)", len(done)))
+		}
+	}
 	// each interface costs a fraction of a second of mostly waiting; independent ones are configured at the same time,
 	// each in its own php process, tier by tier so parents are up before what sits on them (LAGG, then VLAN, then the rest)
 	tiers := make([][]Iface, 4)
@@ -88,6 +101,9 @@ func (d *Daemon) promote(reason string) (retErr error) {
 			continue // assigned but disabled in the config: stays down on the active node too
 		}
 		enabled = append(enabled, i)
+		if warmDone[i.Key] {
+			continue // already configured natively
+		}
 		tiers[devTier(i)] = append(tiers[devTier(i)], i)
 	}
 	for _, group := range tiers {

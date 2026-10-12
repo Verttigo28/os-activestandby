@@ -163,6 +163,9 @@ func (d *Daemon) localChecks() []Check {
 	if !d.cfg.autoOn() {
 		cs = append(cs, warn("automatic failover", "disabled in the settings"))
 	}
+	if d.warmOn() {
+		cs = append(cs, d.warmChecks()...)
+	}
 	if d.cfg.FenceCommand != "" {
 		if err := validateFenceCommand(d.cfg.FenceCommand); err != nil {
 			cs = append(cs, fail("fencing", err.Error()))
@@ -175,15 +178,27 @@ func (d *Daemon) localChecks() []Check {
 		set, err := d.health.ifaces(activeXML(d.store.dir))
 		if err == nil {
 			up, _ := sh("ifconfig", "-l", "-u")
+			warm := d.warmSet(activeXML(d.store.dir), set)
 			var loud []string
 			for _, dev := range set.ForceDown {
-				if strings.Contains(" "+up+" ", " "+dev+" ") {
-					loud = append(loud, dev)
+				if !strings.Contains(" "+up+" ", " "+dev+" ") {
+					continue
 				}
+				if shared, ok := warm[dev]; ok {
+					// warm standby: up is expected, but only silent: own MAC, no address, IPv6 off
+					st := d.readIf(dev)
+					if hw, known := d.hwm().resolve(dev, shared, st); known && st.silent(hw) {
+						continue
+					}
+				}
+				loud = append(loud, dev)
 			}
-			if len(loud) > 0 {
+			switch {
+			case len(loud) > 0:
 				cs = append(cs, fail("standby silence", "data devices are up on the standby: "+strings.Join(loud, ", ")))
-			} else {
+			case len(warm) > 0:
+				cs = append(cs, pass("standby silence", "data devices are down, or up and silent (own MAC, no address) in warm standby"))
+			default:
 				cs = append(cs, pass("standby silence", "all data devices are down"))
 			}
 		}

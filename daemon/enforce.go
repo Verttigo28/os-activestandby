@@ -17,6 +17,13 @@ func (d *Daemon) enforceLoop() {
 		}
 		d.markerStep()
 		d.ensureConfigLock()
+		if d.store.Get().State == StateActive && d.warmOn() && tick%30 == 2 && d.ops.mu.TryLock() {
+			// an active node carries the shared MAC: remember its permanent one while that is still visible
+			if set, err := d.ops.ifaces(configPath()); err == nil {
+				d.warmLearn(configPath(), set)
+			}
+			d.ops.mu.Unlock()
+		}
 		if d.store.Get().State != StateStandby {
 			continue
 		}
@@ -44,17 +51,22 @@ func (d *Daemon) enforceOnce() {
 		if err != nil {
 			return
 		}
-		up, _ := sh("ifconfig", "-l", "-u")
+		warm := d.warmSet(activeXML(d.store.dir), set)
+		up, _ := d.run("ifconfig", "-l", "-u")
 		upSet := map[string]bool{}
 		for _, n := range strings.Fields(up) {
 			upSet[n] = true
 		}
 		for _, dev := range set.ForceDown {
+			if _, isWarm := warm[dev]; isWarm {
+				continue // kept up and silent by warmReadiness below
+			}
 			if upSet[dev] {
 				log.Printf("enforcer: %s was up on standby, forcing down", dev)
-				flushDev(dev)
+				d.flush(dev)
 			}
 		}
+		d.warmReadiness(activeXML(d.store.dir), set)
 	}
 }
 

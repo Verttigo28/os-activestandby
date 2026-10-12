@@ -217,6 +217,9 @@ type actions struct {
 	promote    func(reason string) error
 	demoteHook func(reason string, afterDown func()) error
 	peerCall   func(path string, timeout time.Duration) (map[string]any, error)
+	sh         func(name string, args ...string) (string, error)
+	plan       func(path string) (WarmPlan, error)
+	flush      func(dev string)
 }
 
 func (d *Daemon) doPromote(reason string) error {

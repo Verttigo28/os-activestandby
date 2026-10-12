@@ -108,3 +108,22 @@ Unit tests with fakes cover the decision logic (`docs/audit.md`). The following 
 | G11 | Returning node | power the old active node off for an hour, power it on | it boots silent, becomes standby, does not take the role back (unless preemption is on) |
 
 Not covered by software or by these steps: partitions that cut both paths between the nodes while both see their own carrier (needs fencing), switch MAC-table behaviour, link-up time of real NICs (see `docs/fast-ha.md`).
+
+## H. Warm standby (experimental): hardware procedure
+
+Never run on real hardware yet; everything below is open. Use two nodes with the same NIC model as production and the production switch (or a switch of the same family). Set *Standby mode* to *Warm* on the active node, wait for the restart, then run `hasyncd ctl preflight` and `hasyncd ctl status` on both nodes (`warm.ready` true on the standby, `peer_warm: ready` seen from the active node). Repeat every measurement in Classic mode for comparison; keep median, P95 and maximum (`lab/failover-bench.sh`, `hasyncd ctl history` for the phases).
+
+| # | Question | How | Expected / decides |
+|---|---|---|---|
+| H1 | Does the standby stay silent? | capture on the standby port and on the active node: no ARP/ND/RA/DHCP/LLDP-with-shared-MAC from the standby, only its own MAC | only frames with the NIC's own MAC |
+| H2 | Does the link stay up at takeover? | watch the carrier of the standby port and the switch port during a failover | no link-down event; if the driver drops the link when the MAC changes, warm mode gives no gain on that NIC |
+| H3 | Does the NIC receive for the new MAC? | ping the shared address right after the takeover, with *Promiscuous mode* off | replies; if not, the driver keeps its receive filter: enable the promiscuous setting or do not use warm mode on it |
+| H4 | MAC table | read the switch's MAC table (or watch for flooding) during the takeover and the stand down | the shared MAC moves to the new port within the gratuitous ARP window; no MAC-flap/port-security log |
+| H5 | Speed | failover 10+ times each way, Classic and Warm | gain per phase (carrier and interfaces), outage seen by the client |
+| H6 | Stand down | after a failover check the old active node: own MAC, no address, link up, IPv6 off | `ifconfig <if>` shows `ether` = permanent MAC, no `inet`, `nd6 options` with IFDISABLED |
+| H7 | Fast path failure | block the MAC change (driver that refuses, or `chflags`/policy), or break `ifconfig` on the standby | event "warm takeover not possible", classic takeover completes, no address left behind |
+| H8 | Not ready standby | unplug a warm port on the standby, then fail over | `warm.ready` false with "no link", takeover uses the classic path and still works |
+| H9 | Permanent MAC memory | reboot the active node, fail over, stand down: check `hwmacs.json` and that the port gets its own MAC back | own MAC restored; on a driver without `hwaddr` the memory is what makes it possible |
+| H10 | VLANs | warm VLAN on a warm parent, VLAN with an unassigned parent | VLAN device follows or keeps its MAC as planned; both ports up |
+| H11 | OPNsense state after the fast path | GUI interface overview, gateway monitoring, `rc.newwanip`-dependent services (dyndns, IPsec binding) after a warm takeover | decides whether a reconcile step is needed |
+| H12 | Split-brain, reboot and loss scenarios of section G | repeat G1-G11 in warm mode | identical results; never two ports with the shared MAC |

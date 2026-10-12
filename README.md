@@ -59,7 +59,7 @@ Details: [getting started](docs/getting-started.md), [operations](docs/operation
 | [Security](docs/security.md) | threat model, controls, hardening, reporting vulnerabilities |
 | [Validation](docs/validation.md) | what was tested, how, and what still needs hardware |
 | [Audit](docs/audit.md) | failover safety audit: findings, fixes, the limits of a two-node cluster |
-| [Fast HA](docs/fast-ha.md) | where the failover time goes, design of a warm standby (not built) |
+| [Warm standby](docs/fast-ha.md) | experimental mode: standby keeps its links up; design, limits, what is untested |
 | [Building](docs/building.md) | build, CI, releases |
 | [Roadmap](docs/roadmap.md) | what is open |
 | [Changelog](CHANGELOG.md) | release history |

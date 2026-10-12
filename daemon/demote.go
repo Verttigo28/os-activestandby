@@ -48,10 +48,13 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) error {
 		return errors.New("the saved configuration has no HA settings (was a backup restored without them?): refusing to stand down, which would cut the HA link; restore the Active/Standby settings first")
 	}
 	// interfaces first (traffic stops immediately), then rewrite the config so nothing re-enables them
+	// warm standby: the devices of the eligible interfaces keep their link but lose the shared MAC and the addresses (in that
+	// order, see silenceCmds); everything else goes down as in the classic standby
+	warm := d.warmSet(activeXML(d.store.dir), set)
 	var fw sync.WaitGroup
 	for _, dev := range set.ForceDown {
 		fw.Add(1)
-		go func(dev string) { defer fw.Done(); flushDev(dev) }(dev)
+		go func(dev string) { defer fw.Done(); d.standbyDevice(dev, warm) }(dev)
 	}
 	fw.Wait()
 	step(t0, fmt.Sprintf("%d devices down", len(set.ForceDown)))

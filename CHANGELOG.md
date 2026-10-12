@@ -2,6 +2,14 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## Unreleased
+Warm standby (experimental, opt-in; see `docs/fast-ha.md`).
+
+- New setting *Standby mode*: *Classic* (default, unchanged) or *Warm standby*. In warm mode the standby keeps the links of its eligible interfaces (static IPv4, shared MAC, plain NIC or VLAN) up with its own MAC, no address and IPv6 off; a takeover sets the shared MAC and the addresses natively and verifies them, any problem falls back to the classic takeover before traffic starts. A stand down gives the own MAC back first, then removes the addresses; the link is never taken down.
+- Readiness: `warm` in the status, `peer_warm` from the heartbeat, pre-flight checks and a GUI banner say whether a fast takeover is possible and why not; it never blocks a failover.
+- `ifaces.php plan` (native plan of the interfaces), `hwmacs.json` (permanent MAC memory).
+- Tested against a model of two hosts and a switch (never two ports with the shared MAC); **not tested on OPNsense or hardware**, procedure in `docs/validation.md` section H.
+
 ## 0.7.0
 Failover safety release (audit in `docs/audit.md`).
 

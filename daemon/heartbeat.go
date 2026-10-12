@@ -43,6 +43,7 @@ type hbMsg struct {
 	TimeMs int64  `json:"time_ms,omitempty"` // sender clock; the standby follows the active node
 	Ver    string `json:"ver,omitempty"`     // OPNsense version of the sender
 	Plug   string `json:"plug,omitempty"`    // hasyncd (plugin) version of the sender
+	Warm   string `json:"warm,omitempty"`    // warm standby: "ready", or why this node could not take over fast (empty: classic mode)
 
 	Links   map[string]bool `json:"links,omitempty"`   // carrier of the sender's data devices
 	Health  string          `json:"health,omitempty"`  // non-empty: the sender (active) currently fails a health check
@@ -135,7 +136,7 @@ func (d *Daemon) localHB() hbMsg {
 		Resync:  st.State == StateStandby && st.PeerFP != "" && (!activeValid(d.store.dir) || d.driftDetected()),
 		Links:   d.health.snapshotLinks(),
 		Health:  d.healthReason(),
-		Applied: st.AppliedSHA, Busy: d.opsBusy(), Host: hostName(), MgmtProbe: d.mgmtProbe(), Maint: st.Maintenance, MaintUntil: st.MaintenanceUntil, MaintAt: st.MaintAt}
+		Applied: st.AppliedSHA, Busy: d.opsBusy(), Warm: d.warmSummary(), Host: hostName(), MgmtProbe: d.mgmtProbe(), Maint: st.Maintenance, MaintUntil: st.MaintenanceUntil, MaintAt: st.MaintAt}
 }
 
 func (d *Daemon) handleHB(w http.ResponseWriter, r *http.Request) {

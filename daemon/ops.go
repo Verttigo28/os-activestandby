@@ -65,11 +65,15 @@ type IfaceSet struct {
 }
 
 type Ops struct {
-	mu      sync.Mutex // serialises promote/demote
-	cache   IfaceSet
-	mtime   time.Time
-	devHash string         // hash of the device definitions create_devices.php last applied here
-	bg      sync.WaitGroup // background work started by promote (DHCP/DNS restart); demote waits for it
+	mu        sync.Mutex // serialises promote/demote
+	cache     IfaceSet
+	mtime     time.Time
+	devHash   string         // hash of the device definitions create_devices.php last applied here
+	bg        sync.WaitGroup // background work started by promote (DHCP/DNS restart); demote waits for it
+	planMu    sync.Mutex     // the warm plan of the full configuration, cached by file time
+	plan      *WarmPlan
+	planMtime time.Time
+	planPath  string
 }
 
 func configPath() string {

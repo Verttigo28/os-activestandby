@@ -1,47 +1,71 @@
-# Fast HA / warm standby: analysis and status
+# Warm standby (experimental)
 
-**Status: not implemented.** This page records what the code says about where failover time goes, what was done towards a faster takeover, and why the central part (keeping the standby's links up with its own MAC and moving the shared identity at takeover) is **not** built yet. The deciding rule: *no speed-up may add any split-brain risk*, and an identity transfer cannot be proven safe without two physical machines and a real switch.
+**Status: implemented, opt-in, never run on real hardware.** The setting *Standby mode* = *Warm standby* turns it on; the default is *Classic* and nothing changes unless an administrator chooses it. It was built from the code and tested against a model of `ifconfig` and a switch (see the test list below), not on OPNsense, a NIC driver or a switch. Expect to tune it with real measurements (`docs/validation.md` section H). The rule behind every decision: *no speed-up may add any split-brain risk*; where that could not be shown, the classic path is kept.
 
-## Where the time goes today
+## What it does
 
-Stage costs read from the code; lab totals are in `docs/validation.md` row 45 (planned failover 0.65-0.85 s of lost traffic, power cut of the active node about 1.5 s, in Hyper-V; real NICs add the link-up time).
+Classic standby: every data interface is administratively down; a takeover brings the link up (a real NIC renegotiates it with the switch, up to 8 s of `waitCarrier`), runs the PHP interface code per interface, and only then announces the MAC.
+
+Warm standby, for the interfaces that qualify:
+
+| | Standby (warm) | Active |
+|---|---|---|
+| Link | **up**, never renegotiated | up |
+| MAC | the NIC's **own** hardware MAC | the shared MAC (`spoofmac`) |
+| IPv4 / IPv6 | none; IPv6 disabled on the device | configured |
+| Answers ARP/ND, routes | no (no address, nothing to answer for) | yes |
+| Promiscuous | off | as configured (*Promiscuous mode on data interfaces*) |
+
+**Takeover** (`warmActivate`, native `ifconfig`, a few ms): verify the port really is in the warm state (up, own MAC, no address); set the shared MAC; enable IPv6; MTU; add the address, the IP aliases and the static IPv6 address; bring it up; read it back and check that the MAC changed and the address is there. Then the usual steps follow unchanged: gratuitous ARP, routes, `filter reload` (verified), services. Any problem **before traffic starts reverts the ports to the silent state and runs the classic takeover for everything**.
+
+**Stand down** (`silenceCmds`): the own MAC comes back **first**, so the NIC stops accepting frames for the shared MAC at once; then promiscuous mode off, then every address removed, then IPv6 disabled. The link is never taken down. The peer is only told to promote after this is done (same hook as in classic mode), and the transition protocol of `docs/audit.md` keeps the order *stand down, then take over*.
+
+Interfaces that do not qualify keep the classic takeover, in the same promotion: DHCP/PPPoE/dynamic IPv4, no shared MAC, LAGG, bridge, GRE/GIF/VXLAN/QinQ, a virtual IP that is not an IP alias (proxy ARP, CARP), a static IPv6 that is not a literal, or a VLAN whose assigned parent does not qualify. The reason of each is shown in the pre-flight and the status.
+
+## Readiness
+
+Every second the standby evaluates whether a fast takeover is possible (`warmReadiness`) and keeps its warm ports silent. It is **not ready**, with the reason, when: a warm port has no link; a port's permanent MAC is unknown (it carries the shared one and `ifconfig` does not print the permanent one, see below; such a port is taken down instead of left on the shared MAC); no interface qualifies; the saved configuration of the active node is missing or damaged; configuration drift is detected; no plan could be made. The result is in the status (`warm`), in the heartbeat (the active node sees the standby's state as `peer_warm`), in the pre-flight and as a banner in the GUI. A takeover on a standby that is not ready simply uses the classic path: readiness never blocks a failover.
+
+The permanent MAC is `hwaddr` as printed by `ifconfig` (it appears when it differs from the current one), else the current MAC if it is not the shared one. It is remembered in `/conf/activestandby/hwmacs.json`, and an active node refreshes it every 30 s while it is still visible.
+
+## Setting and compatibility
+
+*Standby mode* is a shared setting (copied from the active firewall; the daemon restarts once to apply it). Unknown values mean classic. A configuration migration is not needed: the field is new with the default *classic*.
+
+## Tested (model, not hardware)
+
+`daemon/warm_test.go` runs the real code against a model of two hosts and a switch that watches the invariant that the shared MAC is never configured on two ports at once:
+
+* command order of takeover and stand down (own MAC first, link never down, up last), parsing of `ifconfig`, plan handling, VLAN parents, HA/management devices excluded;
+* readiness (silences leftovers, no link, missing configuration), classic mode touches nothing;
+* a complete A to B takeover and back, with no moment where two ports hold the shared MAC;
+* a driver that ignores the MAC change: the fast path fails, the ports are silent again, nothing is left configured;
+* a port that is not silent at takeover is refused; an unknown permanent MAC falls back to classic.
+
+## Not tested, not implemented
+
+| | |
+|---|---|
+| Implemented, **not tested on OPNsense** | the plan extractor in `ifaces.php` (no PHP available where it was written; CI lints it), the integration in promote/demote/enforcer/pre-flight, the GUI setting and banner |
+| Unknown until measured | whether the driver (ixl, igb, vmx, hn, virtio) changes the MAC with the link up without dropping it or the receive filter; whether the switch learns the shared MAC from the gratuitous ARP quickly enough or needs more; port-security (two MACs on the port group); hypervisor MAC spoofing rules; VLAN devices following their parent's MAC; `ifdisabled` behaviour per driver |
+| Not done by design | the routes step (`system_routing_configure`), `filter reload` and the services still run as in classic mode after the addresses are in; OPNsense's own interface state (files under `/tmp`, rc events such as `rc.newwanip`) is **not** refreshed on the fast path |
+| Not implemented | LAGG/LACP, bridges and tunnels, dynamic addressing, CARP, a pf ruleset preloaded on the standby (OPNsense omits interfaces without an address, so the ruleset has to be generated after the addresses exist), IPv6 router advertisements, reconciling OPNsense's interface state after the fast path |
+
+## Where the time goes (what to measure)
 
 | Stage | Cost | Source |
 |---|---|---|
-| Detection | `detect_time` (default 3 s, minimum 1 s); about 8 heartbeats per period, minimum interval 150 ms, 1 s timeout per beat | `heartbeat.go` |
-| Decision | isolation checks (an `ifconfig` call), optional fencing command (up to 30 s) | `autofail.go`, `fence.go` |
-| Virtual devices | normally nothing (they stay on the standby); `create_devices.php` only when the definitions changed | `promote.go` |
-| Interface reconfigure | one PHP process per interface, parallel per tier (NIC, LAGG, VLAN); a fraction of a second each | `promote.go` |
-| Carrier | `waitCarrier` up to 8 s. An administratively down NIC renegotiates its link on a real switch: the dominant term on hardware, invisible in Hyper-V | `devices.go` |
-| ARP | gratuitous ARP once the links are up, repeated for a few seconds | `garp_*.go` |
-| pf and services | `configctl filter reload` and IPsec/OpenVPN/WireGuard start in parallel; DHCP/DNS in the background | `promote.go`, `pf.go` |
+| Detection | `detect_time` (default 3 s, minimum 1 s); about 8 heartbeats per period, minimum interval 150 ms | `heartbeat.go` |
+| Decision | isolation checks, optional fencing command (up to 30 s) | `autofail.go`, `fence.go` |
+| Interfaces | classic: PHP per interface plus up to 8 s of carrier wait; warm: native `ifconfig`, verified | `promote.go`, `warm.go` |
+| ARP | gratuitous ARP once the identity is set, repeated for a few seconds | `garp_*.go` |
+| pf and services | `filter reload` and VPN start in parallel; DHCP/DNS in the background | `promote.go`, `pf.go` |
 
-## What exists now (measure before optimising)
+Each promotion records its phases (offset in ms) and, for an automatic one, `detect_ms` in `hasyncd ctl history`; a promotion that used the fast path has the phase "shared identity taken natively". `lab/failover-bench.sh` measures the outage a client sees. **No benchmark results exist yet and none are claimed**; the detection time is configurable from 1 s but the heartbeat (a TLS request per beat) is not meant for sub-300 ms detection, so no such target is promised.
 
-* Every promotion records its **phases** (offset in ms from its start: configuration restored, devices ready, interfaces reconfigured, links up, ARP sent, pf and services, ACTIVE) and, for an automatic one, **`detect_ms`**, the silence of the peer when the decision was taken. Both are in `hasyncd ctl history`.
-* `lab/failover-bench.sh` measures the outage a client sees (longest run of lost echo requests at a 20 ms interval) over repeated runs and prints median, P95 and maximum.
-* The detection time is configurable from 1 s. The heartbeat transport (a TLS request per beat) is not meant for sub-300 ms detection, so a "below 300 ms" target is **not** claimed.
+## Next steps with real data
 
-Run on real hardware, these give the numbers the task asks for (last heartbeat, detection, decision, activation, first packet). **No benchmark results exist yet and none are claimed.**
-
-## Design of a warm standby (proposal, not built)
-
-Goal: the standby keeps its NICs and VLANs up and its ruleset loaded, so a takeover is only "take the shared MAC, add the addresses, announce".
-
-1. **Own MAC while standby.** Each node keeps its factory MAC on the data NICs; the shared MAC is set (`ifconfig <if> link <mac>`) at promotion. Two ports must never carry the shared MAC at the same time (MAC flapping in the switch's CAM table). The strict order *demote, then promote* is what the transition protocol of `docs/audit.md` guarantees.
-2. **Silent standby.** Links up without any IP address, IPv6 router advertisements and neighbour discovery off, no DHCP client, no ARP or ND for the shared addresses, forwarding off, ruleset for the production interfaces loaded.
-3. **Preconditions.** Each must hold or the standby is reported *not ready* and the mode is refused: configuration in sync (`AppliedSHA` equal to the active node's), same OPNsense and plugin versions, pfsync up, ruleset loaded, links up, no drift, switch port-security allowing two MACs for the port group.
-4. **Fast path, then slow path.** Fast: re-check the preconditions, set the MAC, add addresses and routes, send ARP, verify forwarding with a probe. Slow, afterwards: service restarts, DHCP/DNS, IPsec re-negotiation, extended checks.
-5. **Failure handling as in `docs/audit.md`.** No promotion on ambiguity, no automatic rollback, and a standby that is not prepared falls back to the classic path.
-
-## Why it is not built blind
-
-* The saving is almost entirely the link renegotiation (up to 8 s of `waitCarrier`), and it depends on the NIC driver (ixl on the target hardware), the switch (CAM aging, port-security, LLDP) and the hypervisor (MAC spoofing). None of this is observable in the lab VMs.
-* A wrong identity change creates exactly the failure the cluster exists to prevent: two ports with one MAC, or an address answered by the standby. It needs the hardware tests of `docs/validation.md` section G before the code, not after.
-* The classic mode is unchanged and remains the only mode.
-
-## Next steps
-
-1. Run `lab/hw-probe.sh` and the benchmark on the target pair to get the real stage costs (the phases are already recorded).
-2. Decide from those numbers whether the remaining cost is the link (then a warm standby is worth building) or something cheaper (PHP reconfigure, pf reload) that can be fixed without touching the identity.
-3. Build the readiness state (precondition 3) first: it is useful in classic mode as well.
+1. Run section H of `docs/validation.md` on the target pair (Classic and Warm, several runs each) and compare median, P95 and maximum.
+2. From the phases decide what still costs time: if it is routes or `filter reload`, run them natively or in parallel; if the switch learns slowly, add more announcements or a different frame.
+3. Decide whether OPNsense's interface state needs a reconcile step after the fast path, and what it may safely run without a link flap.
+4. Extend to the interfaces that fall back today (LAGG, dynamic addressing) only if the numbers justify the added risk.

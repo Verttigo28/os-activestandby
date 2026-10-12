@@ -41,6 +41,7 @@ type Config struct {
 	MgmtProbeTargets string `json:"mgmt_probe_targets"` // pinged from the management address on both nodes (e.g. the management switch)
 	SyncSessions     *bool  `json:"sync_sessions"`      // replicate GUI logins to the standby (default on)
 	PairExpires      string `json:"pair_expires"`       // ... and its deadline
+	HAMode           string `json:"ha_mode"`            // "classic" (default) or "warm" (see warm.go)
 }
 
 func (c Config) autoOn() bool       { return c.AutoFailover == nil || *c.AutoFailover }
@@ -80,6 +81,9 @@ type Daemon struct {
 	degraded      atomic.Value // string: why the last promotion left this node degraded (empty: healthy)
 	pfsyncProblem atomic.Value // string: why pfsync is not in place (empty: as configured)
 	pkgReport     atomic.Value // string: how the plugin set of this standby differs from the active node (empty: conform)
+	wst           warmStatus   // readiness of the warm standby (see warm.go)
+	hwOnce        sync.Once
+	hwv           *hwMacs // permanent MAC addresses of the warm devices
 }
 
 func loadConfig() Config {
@@ -97,6 +101,9 @@ func loadConfig() Config {
 	}
 	if c.ListenPort < 1024 || c.ListenPort > 65535 {
 		c.ListenPort = 7690
+	}
+	if c.HAMode != "warm" { // anything else is the classic mode
+		c.HAMode = "classic"
 	}
 	// device names end up as arguments of ifconfig and friends: only plain names
 	for _, dev := range []*string{&c.HADevice, &c.MgmtDevice} {

@@ -26,6 +26,14 @@
                 <Default>0</Default>
                 <Required>Y</Required>
             </allow_ha_only_promote>
+            <ha_mode type="OptionField">
+                <Default>classic</Default>
+                <Required>Y</Required>
+                <OptionValues>
+                    <classic>Classic standby (interfaces down)</classic>
+                    <warm>Warm standby (experimental: interfaces up and silent)</warm>
+                </OptionValues>
+            </ha_mode>
             <force_promisc type="BooleanField">
                 <Default>0</Default>
                 <Required>Y</Required>
