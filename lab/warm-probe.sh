@@ -56,17 +56,26 @@ sample() { # $1 = seconds
 	done
 	echo "$lost" > "$TMP/lost"
 }
-for dir in "to $NEWMAC:$NEWMAC" "back to $ORIG:$ORIG"; do
-	mac="${dir#*:}"; label="${dir%%:*}"
+change() { # $1 = label, $2 = new MAC (kept apart: a MAC contains colons)
 	sample 4 &
 	pid=$!
 	sleep 1
-	ifconfig "$IF" link "$mac"
+	ifconfig "$IF" link "$2"
 	wait $pid
 	lost=$(cat "$TMP/lost")
-	echo "change $label: about $((lost * 20)) ms without carrier (0 = the link never dropped)"
+	echo "change $1: about $((lost * 20)) ms without carrier (0 = the link never dropped)"
 	echo "   ether now: $(ifconfig "$IF" | awk '$1=="ether"{print $2; exit}')   hwaddr line: $(ifconfig "$IF" | awk '$1=="hwaddr"{print $2; exit}')"
-done
+}
+change "to $NEWMAC" "$NEWMAC"
+change "back to $ORIG" "$ORIG"
+
+# 'up' on an interface that is already up: does it re-initialise the link? (the warm commands end with it)
+sample 4 &
+pid=$!
+sleep 1
+ifconfig "$IF" up
+wait $pid
+echo "ifconfig up on an up interface: about $(($(cat "$TMP/lost") * 20)) ms without carrier"
 
 echo
 echo "== D. what ifconfig prints with a changed MAC, IPv6 disabled, promiscuous off"
