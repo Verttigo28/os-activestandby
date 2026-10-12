@@ -16,21 +16,22 @@ import (
 // at most two health switches in 30 minutes and a 5 minute cool-down.
 
 type healthState struct {
-	mu          sync.Mutex
-	failSince   map[string]time.Time
-	reasons     []string
-	cooldown    time.Time
-	switches    []time.Time
-	lastRestart map[string]time.Time
-	warned      map[string]bool
-	links       map[string]bool // carrier of this node's data devices, sent in every heartbeat
-	graceUntil  time.Time       // no health switching right after a promote (DHCP/PPPoE WAN, gateways, services still coming up)
-	devMu       sync.Mutex
-	devPath     string
-	devMtime    time.Time
-	devSet      IfaceSet
-	mgmtBad     int    // consecutive failed management probes
-	mgmtMsg     string // last failure message
+	mu           sync.Mutex
+	failSince    map[string]time.Time
+	reasons      []string
+	cooldown     time.Time
+	switches     []time.Time
+	lastRestart  map[string]time.Time
+	warned       map[string]bool
+	links        map[string]bool // carrier of this node's data devices whose state can be read, sent in every heartbeat
+	linksUnknown []string        // data devices whose state cannot be read (administratively down and no carrier: a standby port)
+	graceUntil   time.Time       // no health switching right after a promote (DHCP/PPPoE WAN, gateways, services still coming up)
+	devMu        sync.Mutex
+	devPath      string
+	devMtime     time.Time
+	devSet       IfaceSet
+	mgmtBad      int    // consecutive failed management probes
+	mgmtMsg      string // last failure message
 }
 
 func newHealthState() *healthState {
@@ -52,6 +53,12 @@ func (h *healthState) ifaces(path string) (IfaceSet, error) {
 		h.devSet = s
 	}
 	return s, err
+}
+
+func (h *healthState) snapshotUnknown() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.linksUnknown...)
 }
 
 func (h *healthState) snapshotLinks() map[string]bool {
@@ -99,13 +106,21 @@ func (d *Daemon) healthStep() {
 		return
 	}
 	links := map[string]bool{}
+	carrier := map[string]bool{} // what this node sees on each device, for its own monitored interfaces
+	var unknown []string
 	byKey := map[string]string{}
 	for _, i := range set.Data {
-		links[i.Dev] = carrierUp(i.Dev)
+		up, known := linkState(i.Dev)
+		carrier[i.Dev] = up
+		if known {
+			links[i.Dev] = up
+		} else {
+			unknown = append(unknown, i.Dev)
+		}
 		byKey[i.Key] = i.Dev
 	}
 	h.mu.Lock()
-	h.links = links
+	h.links, h.linksUnknown = links, unknown
 	h.mu.Unlock()
 	d.mgmtProbeStep()
 
@@ -122,7 +137,7 @@ func (d *Daemon) healthStep() {
 	failures := map[string]string{} // id -> description
 	for _, key := range strings.Split(d.cfg.MonitorIfaces, ",") {
 		key = strings.TrimSpace(key)
-		if dev, ok := byKey[key]; ok && key != "" && !links[dev] {
+		if dev, ok := byKey[key]; ok && key != "" && !carrier[dev] {
 			failures["link:"+dev] = "no carrier on " + key + " (" + dev + ")"
 		}
 	}
@@ -191,9 +206,15 @@ func (d *Daemon) healthSwitch(due []string, failures map[string]string) {
 	for _, id := range due {
 		if strings.HasPrefix(id, "link:") {
 			dev := strings.TrimPrefix(id, "link:")
-			if !peer.Links[dev] {
-				warn(id, "no carrier on "+dev+" here, but the standby cannot confirm link on its port either: not switching (the outage would only move)")
+			// only a link the standby could READ and found down keeps this node active. A standby keeps its ports administratively
+			// down (and a VLAN on a LAGG follows its parent), where "no carrier" means "not looked at", not "no cable": an unknown
+			// state does not block, the ping-pong protection below limits the cost of being wrong.
+			if v, known := peer.Links[dev]; known && !v && !contains(peer.LinksUnknown, dev) {
+				warn(id, "no carrier on "+dev+" here, but the standby reads no link on its port either: not switching (the outage would only move)")
 				return
+			}
+			if contains(peer.LinksUnknown, dev) {
+				warn(id+":unverified", "the standby cannot read the link of "+dev+" (its port is kept down); switching without that confirmation")
 			}
 		}
 	}
@@ -347,4 +368,42 @@ func (d *Daemon) mgmtProbe() string {
 		return "fail"
 	}
 	return "ok"
+}
+
+func contains(l []string, s string) bool {
+	for _, x := range l {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// linkState reads a device: up is "status: active"; known is false only when the device is administratively down AND reports no
+// carrier, because then nothing tells a missing cable from a port that was never brought up (a standby keeps its data ports down;
+// a VLAN on a LAGG reports "no carrier" as soon as the LAGG is down). Devices that keep their link while down (ixl) are known.
+func linkState(dev string) (up, known bool) {
+	if !devNameRe.MatchString(dev) { // the name comes from the replicated configuration and becomes an argument of ifconfig
+		return false, false
+	}
+	if dev == "" {
+		return false, false
+	}
+	out, err := sh("ifconfig", dev)
+	if err != nil {
+		return false, false
+	}
+	return parseLinkState(out)
+}
+
+func parseLinkState(out string) (up, known bool) {
+	up = strings.Contains(out, "status: active")
+	first := strings.SplitN(out, "\n", 2)[0]
+	adminUp := false
+	if i, j := strings.Index(first, "<"), strings.Index(first, ">"); i >= 0 && j > i {
+		for _, f := range strings.Split(first[i+1:j], ",") {
+			adminUp = adminUp || f == "UP"
+		}
+	}
+	return up, up || adminUp
 }

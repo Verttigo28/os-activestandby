@@ -642,3 +642,28 @@ func TestZeroMACIsNeverAHardwareMAC(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanWithMalformedAddressesIsNotWarm(t *testing.T) {
+	good := WarmIface{Key: "k", Dev: "igb3", MAC: "02:aa:bb:cc:dd:0a", V4: "172.20.0.1/24", Eligible: true}
+	if p := sanitize(WarmPlan{Ifaces: []WarmIface{good}}); !p.Ifaces[0].Eligible {
+		t.Fatalf("a good entry was refused: %+v", p.Ifaces[0])
+	}
+	bad := map[string]func(WarmIface) WarmIface{
+		"argument smuggled into the IPv4": func(i WarmIface) WarmIface { i.V4 = "172.20.0.1/24 vhid 5"; return i },
+		"no prefix":                       func(i WarmIface) WarmIface { i.V4 = "172.20.0.1"; return i },
+		"IPv6 in the IPv4 field":          func(i WarmIface) WarmIface { i.V4 = "2001:db8::1/64"; return i },
+		"IPv4 in the IPv6 field":          func(i WarmIface) WarmIface { i.V6 = "172.20.0.2/24"; return i },
+		"option in an alias":              func(i WarmIface) WarmIface { i.VIPs = []string{"172.20.0.9/24", "-alias"}; return i },
+		"prefix 0":                        func(i WarmIface) WarmIface { i.V4 = "0.0.0.0/0"; return i },
+		"absurd MTU":                      func(i WarmIface) WarmIface { i.MTU = 70000; return i },
+		"tiny MTU":                        func(i WarmIface) WarmIface { i.MTU = 20; return i },
+		"multicast MAC":                   func(i WarmIface) WarmIface { i.MAC = "01:00:5e:00:00:01"; return i },
+		"MAC with a trailing argument":    func(i WarmIface) WarmIface { i.MAC = "02:aa:bb:cc:dd:0a up"; return i },
+	}
+	for name, mutate := range bad {
+		p := sanitize(WarmPlan{Ifaces: []WarmIface{mutate(good)}})
+		if p.Ifaces[0].Eligible || p.Ifaces[0].Reason == "" {
+			t.Errorf("%s was accepted: %+v", name, p.Ifaces[0])
+		}
+	}
+}

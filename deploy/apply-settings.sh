@@ -16,31 +16,31 @@ HA_IF="${HA_IF:-}"                # the dedicated cable to the other firewall (r
 MGMT_IF="${MGMT_IF:-}"            # management interface, stays up on the standby; empty = none (weaker split-brain protection)
 
 # --- recommended values for a Supermicro with real (Intel) NICs; shared settings are copied to the standby from the active node
-ENABLED=1                         # this firewall runs the HA service
-AUTO_FAILOVER=1                   # the standby takes over by itself
-DETECT_TIME=3                     # seconds of silence before the peer counts as dead (1-30; 3 is the safe default)
-HA_MODE=classic                   # classic | warm (experimental: validate with lab/warm-probe.sh and docs/validation.md section H first)
-VIRTUAL_MAC=1                     # generated shared MAC (02:...) instead of the primary's hardware MAC
-FORCE_PROMISC=0                   # only for virtual NICs; real NICs reprogram their receive filter
-PREEMPT=0                         # 1: the primary takes the active role back by itself after a failback delay
-SYNC_SESSIONS=1                   # GUI logins survive a failover
-HEALTH_SERVICES=0                 # 1: restart/switch when pf or IPsec fail on the active node
-MGMT_PROBE_TARGETS=""             # optional: IPv4 of the management switch, pinged from the management address on both nodes
+ENABLED="${ENABLED:-1}"                         # this firewall runs the HA service
+AUTO_FAILOVER="${AUTO_FAILOVER:-1}"                   # the standby takes over by itself
+DETECT_TIME="${DETECT_TIME:-3}"                     # seconds of silence before the peer counts as dead (1-30; 3 is the safe default)
+HA_MODE="${HA_MODE:-classic}"                   # classic | warm (experimental: validate with lab/warm-probe.sh and docs/validation.md section H first)
+VIRTUAL_MAC="${VIRTUAL_MAC:-1}"                     # generated shared MAC (02:...) instead of the primary's hardware MAC
+FORCE_PROMISC="${FORCE_PROMISC:-0}"                   # only for virtual NICs; real NICs reprogram their receive filter
+PREEMPT="${PREEMPT:-0}"                         # 1: the primary takes the active role back by itself after a failback delay
+SYNC_SESSIONS="${SYNC_SESSIONS:-1}"                   # GUI logins survive a failover
+HEALTH_SERVICES="${HEALTH_SERVICES:-0}"                 # 1: restart/switch when pf or IPsec fail on the active node
+MGMT_PROBE_TARGETS="${MGMT_PROBE_TARGETS:-}"             # optional: IPv4 of the management switch, pinged from the management address on both nodes
+MONITOR_IFS="${MONITOR_IFS:-}"                   # comma separated interface KEYS whose loss of link on the active node causes a failover, e.g. wan,lan,opt1 (empty: none, a dead NIC then causes no failover)
+PROBE_TARGETS="${PROBE_TARGETS:-}"                  # optional: IPv4 addresses (the upstream gateway) the active node must reach; none answering causes a failover (catches "link up but no traffic")
 # fencing is optional: FENCE_COMMAND="" (an absolute path to a root-owned executable, see docs/security.md)
-FENCE_COMMAND=""
+FENCE_COMMAND="${FENCE_COMMAND:-}"
 
 API="https://$HOST/api/activestandby"
 creds() { printf 'user = "%s:%s"\n' "${API_KEY:?set API_KEY}" "${API_SECRET:?set API_SECRET}"; }
-call() { # method path [data]
-	if [ -n "$3" ]; then
-		creds | curl -sk -K - -X "$1" -d "$3" "$API$2"
-	else
-		creds | curl -sk -K - -X "$1" "$API$2"
-	fi
+get() { creds | curl -sk -K - "$API$1"; }
+post() { # path, then curl arguments (the data)
+	p=$1; shift
+	creds | curl -sk -K - -X POST "$@" "$API$p"
 }
 
 if [ "$1" = "show" ]; then
-	call GET /settings/get
+	get /settings/get
 	echo
 	exit 0
 fi
@@ -49,19 +49,25 @@ fi
 [ "$HA_IF" != "$MGMT_IF" ] || { echo "HA and management interface must differ"; exit 2; }
 case "$HA_MODE" in classic | warm) ;; *) echo "HA_MODE must be classic or warm"; exit 2 ;; esac
 
-g='activestandby[general]'
-DATA="$g[enabled]=$ENABLED&$g[ha_interface]=$HA_IF&$g[mgmt_interface]=$MGMT_IF"
-DATA="$DATA&$g[auto_failover]=$AUTO_FAILOVER&$g[detect_time]=$DETECT_TIME&$g[ha_mode]=$HA_MODE"
-DATA="$DATA&$g[virtual_mac]=$VIRTUAL_MAC&$g[force_promisc]=$FORCE_PROMISC&$g[preempt]=$PREEMPT"
-DATA="$DATA&$g[sync_sessions]=$SYNC_SESSIONS&$g[health_services]=$HEALTH_SERVICES"
-DATA="$DATA&$g[mgmt_probe_targets]=$MGMT_PROBE_TARGETS&$g[fence_command]=$FENCE_COMMAND"
+# every value is URL-encoded by curl: a space or an ampersand in a value cannot add or change another setting
+set --
+add() { set -- "$@" --data-urlencode "activestandby[general][$1]=$2"; }
+add enabled "$ENABLED"; add ha_interface "$HA_IF"; add mgmt_interface "$MGMT_IF"
+add auto_failover "$AUTO_FAILOVER"; add detect_time "$DETECT_TIME"; add ha_mode "$HA_MODE"
+add virtual_mac "$VIRTUAL_MAC"; add force_promisc "$FORCE_PROMISC"; add preempt "$PREEMPT"
+add sync_sessions "$SYNC_SESSIONS"; add health_services "$HEALTH_SERVICES"
+add mgmt_probe_targets "$MGMT_PROBE_TARGETS"; add fence_command "$FENCE_COMMAND"
+add monitor_interfaces "$MONITOR_IFS"; add probe_targets "$PROBE_TARGETS"
 
 echo "== saving the settings"
-out=$(call POST /settings/set "$DATA")
+out=$(post /settings/set "$@")
 echo "$out"
 case "$out" in *'"saved"'*) ;; *) echo "NOT saved (see the validation messages above)"; exit 1 ;; esac
 
 echo "== applying (renders the daemon configuration and starts the service)"
-call POST /service/reconfigure "_=1"
+post /service/reconfigure -d "_=1"
 echo
+if [ -z "$MONITOR_IFS" ] && [ -z "$PROBE_TARGETS" ] && [ "$HEALTH_SERVICES" != 1 ]; then
+	echo "!! nothing is monitored (MONITOR_IFS, PROBE_TARGETS, HEALTH_SERVICES are empty): a dead network card on the active node will NOT cause a failover."
+fi
 echo "== next: Status page, then the wizard (Setup wizard) to pair with the second firewall."

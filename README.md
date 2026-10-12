@@ -6,7 +6,7 @@ One IP and one MAC per interface, shared by two firewalls. The standby sits sile
 [![ci](https://github.com/Verttigo28/opn-betterHA/actions/workflows/ci.yml/badge.svg)](https://github.com/Verttigo28/opn-betterHA/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
 
-> Status: validated in a Hyper-V lab (OPNsense 26.7). Not yet validated on physical NICs and switches, see [validation](docs/validation.md). Review the [security notes](docs/security.md) before putting it in front of production traffic.
+> Status: validated in a Hyper-V lab (OPNsense 26.7) and, with the real daemons against each other, on a FreeBSD 15 machine ([sandbox](lab/sandbox/README.md)); the NIC behaviour was measured on a Supermicro with Intel X710 and I210. Not yet validated as a pair of physical firewalls on a real switch, see [validation](docs/validation.md). Review the [security notes](docs/security.md) before putting it in front of production traffic.
 
 ## Why
 
@@ -59,6 +59,7 @@ Details: [getting started](docs/getting-started.md), [operations](docs/operation
 | [Security](docs/security.md) | threat model, controls, hardening, reporting vulnerabilities |
 | [Validation](docs/validation.md) | what was tested, how, and what still needs hardware |
 | [Audit](docs/audit.md) | failover safety audit: findings, fixes, the limits of a two-node cluster |
+| [Sandbox](lab/sandbox/README.md) | two real nodes on one FreeBSD machine: the scenarios, what they prove and what they cannot |
 | [Warm standby](docs/fast-ha.md) | experimental mode: standby keeps its links up; design, limits, what is untested |
 | [Building](docs/building.md) | build, CI, releases |
 | [Roadmap](docs/roadmap.md) | what is open |

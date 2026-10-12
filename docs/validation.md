@@ -127,3 +127,29 @@ Never run on real hardware yet; everything below is open. Use two nodes with the
 | H10 | VLANs | warm VLAN on a warm parent, VLAN with an unassigned parent | VLAN device follows or keeps its MAC as planned; both ports up |
 | H11 | OPNsense state after the fast path | GUI interface overview, gateway monitoring, `rc.newwanip`-dependent services (dyndns, IPsec binding) after a warm takeover | decides whether a reconcile step is needed |
 | H12 | Split-brain, reboot and loss scenarios of section G | repeat G1-G11 in warm mode | identical results; never two ports with the shared MAC |
+
+## I. Sandbox: the real daemons against each other on one FreeBSD machine (0.9.0)
+
+Run on a Supermicro machine (OPNsense 26.7, FreeBSD 15.1) with `lab/sandbox`: two vnet jails are the nodes, `epair` interfaces and bridges the switches, a third jail the client; the daemons are the FreeBSD build of this repository, paired over mutual TLS; OPNsense's PHP and `configctl`/`pfctl`/`pluginctl` are replaced by stubs and shims (pf and the filter reload can be made to fail, a carrier can be made to disappear). A detector samples both nodes every 100 ms; two consecutive samples with the shared MAC and address on both nodes, interface up, count as a double active. **PASS** below means: ran in both the classic and the warm mode unless stated, final results.
+
+| # | Scenario | Result | Measured |
+|---|---|---|---|
+| 1 | Pairing, steady state | PASS | A master and active, B standby; heartbeats alive on both paths; configuration in sync; the standby holds the full configuration and its own hostname; classic: its data ports are down; warm: up, own MAC, no address, IPv6 off, `ready`; the standby sends no frame on its data interface; the data switch learned the shared MAC on A's port |
+| 2 | Graceful failover both ways, client pinging at 20 ms | PASS | command 95-117 ms, **2-3 pings lost (40-60 ms)**; the shared MAC moves to the other port of the switch; WAN too; warm: the promotion used the native path |
+| 3 | Daemon restarts | PASS | standby restart: no role change; active restart within a second: no failover |
+| 4 | Power cut of the active node, then its return | PASS | the standby serves traffic about 3.3 s after the cut (detection 3.25 s), **client outage 2.8 s**; the returning node comes back as standby and does not take the role back; configuration back in sync |
+| 5 | Split-brain forced on purpose | PASS | resolved in 1.5-1.8 s, overlap 1.4-1.5 s, the loser reports it |
+| 6 | pf not enabled / filter reload failing at promotion | PASS | the promotion is refused, the node returns to standby with nothing of the shared identity left, the old active node takes its role back **after the peer's confirmation**; the reason is in the event log |
+| 7 | Warm: standby with no link, port not silent at takeover | PASS (warm) | `not ready (no link)` seen by both nodes; a port that is no longer silent at takeover makes the fast path refuse, the classic path completes |
+| 8 | The peer dies during a hand-over | PASS | the old node does not roll back; the survivor serves traffic again after **18.3-18.6 s** (54 s before 0.9.0) |
+| 9 | Configuration change on the active node | PASS | replicated, in sync again, the standby keeps its own hostname |
+| 10 | HA path lost, management path lost, standby that cannot prove it is not isolated | PASS | no role change with one path lost; the isolated standby does not promote and says why |
+| 11 | Both paths between the nodes cut, links up (symmetric partition) | PASS (documents the limit) | **the standby promotes after 2.9-3.5 s: about 3 s of double active**, one owner 1.5 s after the paths return. This is the case that needs fencing |
+| 12 | The active daemon dead for 6 s, interfaces still up | PASS | the standby kept still (anti-flapping hold after the previous change); one owner 18 ms after the daemon returned |
+| 13 | 20 % packet loss on both heartbeat paths for 25 s | PASS | no failover |
+| 14 | A peer frozen for 70 s (SIGSTOP), then released | PASS | never two owners; the old active node serves traffic again after about 48 s (45 s reply timeout); the late request never promotes the peer; a woken daemon no longer promotes on the silence it slept through (found here, fixed in 0.9.0) |
+| 15 | A monitored interface of the active node loses its carrier | PASS | the roles switch after **4.7 s**; when the standby cannot read its own port (classic) the switch happens anyway and says so; when it reads no link either (warm) it does not |
+
+Totals of the last runs: classic 24/24 on the changed sections after 89/90 in the full run, warm 23/23 on section 15 after 98/104 in the full run (every failure was a defect of the scenario, understood and fixed; two real defects of the daemon were found by this battery, see [audit](audit.md)). Unit tests on the machine itself: 93 pass natively on FreeBSD, `go test -race` passes, `staticcheck` and `go vet` are clean.
+
+What this does **not** cover: a real NIC driver, a real switch (no CAM aging, no port security), OPNsense's own PHP, LACP with a real partner, timing on hardware. Everything in sections G and H that needs hardware is still open.

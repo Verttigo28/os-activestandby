@@ -148,15 +148,8 @@ func activeValid(dir string) bool {
 // The helper scripts of the plugin. HASYNC_SCRIPTS (and HASYNC_PATH for the search path of the external commands) exist
 // only for the sandbox in lab/sandbox, where the daemons run against stub scripts and shims; unset in production.
 var (
-	scriptDir     = envOr("HASYNC_SCRIPTS", "/usr/local/opnsense/scripts/OPNsense/ActiveStandby")
+	scriptDir     = envDir("HASYNC_SCRIPTS", "/usr/local/opnsense/scripts/OPNsense/ActiveStandby")
 	ifacesScript  = scriptDir + "/ifaces.php"
 	reconfScript  = scriptDir + "/reconfigure_ifaces.php"
 	devicesScript = scriptDir + "/create_devices.php"
 )
-
-func envOr(name, def string) string {
-	if v := os.Getenv(name); v != "" {
-		return v
-	}
-	return def
-}

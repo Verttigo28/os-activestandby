@@ -163,6 +163,9 @@ func (d *Daemon) localChecks() []Check {
 	if !d.cfg.autoOn() {
 		cs = append(cs, warn("automatic failover", "disabled in the settings"))
 	}
+	if d.cfg.MonitorIfaces == "" && d.cfg.ProbeTargets == "" && !d.cfg.HealthServices {
+		cs = append(cs, warn("failure detection on the active node", "no interface, no service and no probe target is monitored: a failed network card or uplink on the active node does not cause a failover, because the heartbeat only proves that the daemon and the HA link work. Choose the monitored interfaces (Settings, Failover) and, ideally, probe targets such as the upstream gateway"))
+	}
 	if d.warmOn() {
 		cs = append(cs, d.warmChecks()...)
 	}

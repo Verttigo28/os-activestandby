@@ -38,10 +38,15 @@ type autoState struct {
 	blocked         atomic.Value // string: why automatic promotion is currently held back
 	holdUntil       atomicTime   // no election of this node until then (the peer is taking its role back after an aborted hand-over)
 	detectMs        atomic.Int64 // silence of the peer when the automatic promotion was decided (for the history)
+	lastTick        time.Time    // when autoStep last ran (to notice that this daemon itself was frozen)
 }
 
 // Split-brain resolution timing. It is deliberately NOT subject to minHold (anti-flapping): two active nodes are an
 // emergency, not a role change that may be damped.
+// stallGap: autoStep runs every 500 ms. If it did not run for this long the daemon itself was frozen (SIGSTOP, a paused or migrated
+// virtual machine, a starved machine) and the silence of the peer measured across that gap says nothing about the peer.
+var stallGap = 3 * time.Second
+
 const (
 	sbBusyMax = time.Minute     // a peer "busy" this long no longer excuses a double active
 	sbRetry   = 2 * time.Second // between two attempts to stand down
@@ -76,6 +81,12 @@ func (d *Daemon) autoLoop() {
 }
 
 func (d *Daemon) autoStep() {
+	now := time.Now()
+	if !d.auto.lastTick.IsZero() && now.Sub(d.auto.lastTick) > stallGap {
+		d.event("warning", "this daemon did not run for %s (frozen, paused or starved): the silence of the peer across that gap is not evidence, the detection starts again from now", now.Sub(d.auto.lastTick).Round(time.Second))
+		d.hb.rebase()
+	}
+	d.auto.lastTick = now
 	st := d.store.Get()
 	if st.PeerFP == "" || (st.State != StateActive && st.State != StateStandby) {
 		d.auto.noActiveSince, d.auto.dualSince, d.auto.dualBusySince = time.Time{}, time.Time{}, time.Time{}

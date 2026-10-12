@@ -171,7 +171,12 @@ if want 7 && [ "$MODE" = warm ]; then
 section "7. warm: standby not ready, and a failed fast path, fall back to the classic takeover"
 monitor_clear
 ensure_active A
-# (an epair never loses its carrier, so "no link" cannot be simulated here; it is covered by the unit tests and by the hardware list)
+touch "$SBX/B/nocarrier_tst0"
+wait_for 15 "not ready" '[ "$(ctl B status | jf warm.ready)" = false ]'
+ck "B reports not ready with the reason (no link)" '[ "$(ctl B status | jf warm.ready)" = false ] && ctl B status | jf warm.reason | grep -q "no link"'
+wait_for 10 "heartbeat shows it" '[ "$(ctl A status | jf peer_warm)" != ready ]'
+ck "A sees the standby is not ready in the heartbeat" '[ "$(ctl A status | jf peer_warm)" != ready ]'
+rm -f "$SBX/B/nocarrier_tst0"
 wait_for 15 "ready" '[ "$(ctl B status | jf warm.ready)" = true ]'
 ck "B reports ready" '[ "$(ctl B status | jf warm.ready)" = true ]'
 ck "A sees the standby ready in the heartbeat" '[ "$(ctl A status | jf peer_warm)" = ready ]'
@@ -335,25 +340,79 @@ fi
 
 # ---------------------------------------------------------------------------------------------------------------------------
 if want 14; then
-section "14. frozen peer: a promote request delivered 95 s late (SIGSTOP / SIGCONT)"
+section "14. frozen peer: a promote request delivered after the peer was frozen for 70 s (SIGSTOP / SIGCONT)"
 act=A; [ "$(st B state)" = active ] && act=B
 sby=$(other $act)
 wait_for 20 "healthy" '[ "$(st '$act' state)" = active ] && [ "$(st '$sby' state)" = standby ] && [ "$(st '$act' peer_alive)" = true ]'
 sleep 3
 monitor_clear
+pr0=$(events $sby | grep -o "ACTIVE (peer request" | wc -l)
 jx $sby pkill -STOP -f "hasyncd daemon"
 ( ctl $act failover > "$SBX/fo.out" 2>&1 ) &
 fp=$!
-sleep 95
-info "after 95 s the old active node says: $(ctl $act status | jf failover_in_progress) in progress, state $(st $act state)"
+sleep 70
+info "after 70 s of freeze the old active node says: state $(st $act state), failover in progress: $(ctl $act status | jf failover_in_progress)"
 jx $sby pkill -CONT -f "hasyncd daemon"
-sleep 50
+sleep 25
 wait $fp 2>/dev/null
 info "result of the failover command: $(head -c 400 "$SBX/fo.out")"
 info "events on $act: $(events $act | head -c 900)"
+ck "the request that sat in the frozen peer never promoted it (neither executed nor obeyed when it finally arrived)" '[ "$(events '$sby' | grep -o "ACTIVE (peer request" | wc -l)" -eq "$pr0" ]'
 ck "never two nodes owning the shared identity during the whole freeze and the late delivery" '[ "$(monitor_violations)" -eq 0 ]'
 ck "exactly one active node at the end" '[ "$(st A state)" != "$(st B state)" ] && { owns A || owns B; } && ! { owns A && owns B; }'
 info "final roles: A=$(st A state) B=$(st B state)   $(monitor_summary)"
+fi
+
+# ---------------------------------------------------------------------------------------------------------------------------
+if want 15; then
+section "15. a monitored interface of the active node loses its carrier (dead card, LAGG down)"
+# monitor lan and wan on both nodes, short hold time
+for n in A B; do
+	cp "$SBX/$n/hasyncd.json" "$SBX/$n/hasyncd.json.orig"
+	sed -i '' 's|"notify_level"|"monitor_interfaces":"lan,wan","health_hold":3,"notify_level"|' "$SBX/$n/hasyncd.json"
+	stop_daemon $n; start_daemon $n
+done
+wait_for 20 "daemons" "daemon_up A && daemon_up B"
+act=A; owns B && act=B
+sby=$(other $act)
+wait_for 20 "healthy" '[ "$(st '$act' state)" = active ] && [ "$(st '$sby' state)" = standby ] && [ "$(st '$act' peer_alive)" = true ]'
+sleep 3
+monitor_clear
+# (1) only the active node loses the carrier of its monitored interface; the standby can read a link on its own port (classic: the
+#     port is down but an epair keeps its carrier; warm: the port is up): the roles switch
+touch "$SBX/$act/nocarrier_tst0"
+t0=$(now)
+wait_for 30 "health switch" "owns $sby"
+t1=$(now)
+info "carrier lost on $act: $sby serves traffic after $(php -r "echo round(($t1-$t0)*1000);") ms"
+ck "the roles switched when the standby could read a link on its own port" 'owns '$sby' && ! owns '$act
+ck "the event log explains it" 'events '$act' | grep -qi "health failure on the active node"'
+ck "no double active" '[ "$(monitor_violations)" -eq 0 ]'
+rm -f "$SBX/$act/nocarrier_tst0"
+sleep 8
+# roles are reversed now: $sby serves traffic, $act is the standby. The decision of the new active node (its own cool-down applies):
+a2=$sby; s2=$act
+wait_for 20 "healthy" '[ "$(st '$a2' state)" = active ] && [ "$(st '$s2' state)" = standby ] && [ "$(st '$a2' peer_alive)" = true ]'
+touch "$SBX/$a2/nocarrier_tst0" "$SBX/$s2/nocarrier_tst0"
+if [ "$MODE" = classic ]; then
+	# (2) the standby keeps its port down and cannot read it: that is not "no link", the switch must happen
+	wait_for 30 "health switch" "owns $s2"
+	ck "classic: switched although the standby could not read the link of its own port" 'owns '$s2' && ! owns '$a2
+	ck "classic: the missing confirmation is logged" 'events '$a2' | grep -qi "cannot read the link"'
+else
+	# (2) warm: the standby's port is up and readable; it reads no link either: the outage would only move. The new active node does not
+	# judge its interfaces for 30 s after a takeover, so wait for the refusal to be logged: only then is "no switch" a result
+	wait_for 70 "refusal logged" 'events '$a2' | grep -qi "reads no link"'
+	ck "warm: the refusal is logged (the standby reads no link on its port either)" 'events '$a2' | grep -qi "reads no link"'
+	sleep 8
+	ck "warm: no switch, the outage would only move" 'owns '$a2' && ! owns '$s2
+fi
+rm -f "$SBX/$a2/nocarrier_tst0" "$SBX/$s2/nocarrier_tst0"
+sleep 6
+for n in A B; do cp "$SBX/$n/hasyncd.json.orig" "$SBX/$n/hasyncd.json"; stop_daemon $n; start_daemon $n; done
+wait_for 20 "daemons" "daemon_up A && daemon_up B"
+sleep 6
+ck "after restoring the settings exactly one node is active" '[ "$(st A state)" != "$(st B state)" ]'
 fi
 
 monitor_stop

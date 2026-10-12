@@ -837,3 +837,45 @@ func TestAnAnsweringButSlowPeerKeepsBeingAsked(t *testing.T) {
 		t.Fatalf("a live peer must be asked until the window is over: %v after %v, %d polls", out, time.Since(t0), polls.Load())
 	}
 }
+
+// ---- a frozen daemon wakes up (found with the sandbox, scenario 14, in warm mode: 1.2 s of double active) ----
+
+func TestFrozenDaemonDoesNotPromoteOnTheSilenceItSlept(t *testing.T) {
+	d, promoted := standbyWithSilentPeer(t, time.Hour, true) // its heartbeat clock says: the peer has been silent for an hour
+	d.auto.lastTick = time.Now().Add(-time.Minute)           // ... but the daemon itself did not run for a minute (SIGSTOP, paused VM)
+	d.autoStep()
+	if promoted.Load() != 0 {
+		t.Fatal("promoted on a silence that was only the daemon's own freeze: a node that wakes up must listen first")
+	}
+	if d.hb.silentFor() > time.Second {
+		t.Fatalf("the silence must count from the wake-up, it is %v", d.hb.silentFor())
+	}
+	// the peer really is gone: after the detection time without any heartbeat the takeover happens as usual
+	silence(d, hbDead+time.Second)
+	d.autoStep()
+	if promoted.Load() != 1 {
+		t.Fatal("a real silence after the wake-up must still lead to the takeover")
+	}
+}
+
+func TestNormalCadenceStillPromotes(t *testing.T) {
+	d, promoted := standbyWithSilentPeer(t, hbDead+time.Second, true)
+	d.auto.lastTick = time.Now().Add(-600 * time.Millisecond) // the usual 500 ms tick
+	d.autoStep()
+	if promoted.Load() != 1 {
+		t.Fatal("a regular tick must not be mistaken for a freeze")
+	}
+}
+
+func TestFrozenActiveNodeDoesNotActOnAStalePeerView(t *testing.T) {
+	d := newHANode(t, activeState(RoleMaster, 7))
+	var f fakeSystem
+	f.install(d)
+	seePeer(d, hbMsg{State: StateStandby, Epoch: 7})
+	silence(d, time.Hour)
+	d.auto.lastTick = time.Now().Add(-time.Minute)
+	d.autoStep()
+	if f.demotes.Load() != 0 || d.store.Get().State != StateActive {
+		t.Fatal("an active node that was frozen must not change role because of what it did not hear")
+	}
+}

@@ -25,3 +25,6 @@ Go unit tests (pairing protocol, no VM needed): `cd daemon; go test ./...`
 `. .\ipsec-lab.ps1; Add-LabTunnel ...` creates the tunnel on the active node (replicates to the standby) and on the peer; see docs/OPERATIONS.md for results.
 
 The root password of the lab VMs is read from `lab/.lab-password` (untracked) or the `OPN_LAB_PW` environment variable.
+
+## Sandbox on one FreeBSD machine
+`lab/sandbox` runs two real daemons against each other on a single FreeBSD/OPNsense machine (vnet jails, epair interfaces, bridges as switches), with a double-active detector; see its [README](sandbox/README.md). `lab/warm-probe.sh` and `lab/hw-probe.sh` measure what a NIC does when its port goes down or its MAC changes.

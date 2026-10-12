@@ -37,6 +37,13 @@ const (
 var tidRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // How long (and how often) the requester polls the peer for the outcome of a transition whose answer was lost.
+// How long the old active node waits for the answer of the peer to "promote" (a classic takeover takes seconds, a few ten seconds on a
+// big configuration; the request itself is only valid for reqTTL), and how long a standby waits for the active node to hand over.
+const (
+	promoteReplyTimeout = 45 * time.Second
+	handoverTimeout     = 120 * time.Second
+)
+
 var (
 	resolveEvery  = time.Second
 	resolveWindow = 45 * time.Second

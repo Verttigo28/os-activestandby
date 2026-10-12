@@ -1,0 +1,8 @@
+#!/bin/sh
+# Everything goes to the real ifconfig. "ifconfig <dev>" reports "no carrier" while $SBXNODE/nocarrier_<dev> exists: an epair never
+# loses its carrier, so this is how the sandbox simulates a dead card or a pulled cable as the daemon sees it.
+if [ $# -eq 1 ] && [ -f "$SBXNODE/nocarrier_$1" ]; then
+	/sbin/ifconfig "$1" | sed 's/status: active/status: no carrier/'
+else
+	exec /sbin/ifconfig "$@"
+fi

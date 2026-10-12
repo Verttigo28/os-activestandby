@@ -45,9 +45,10 @@ type hbMsg struct {
 	Plug   string `json:"plug,omitempty"`    // hasyncd (plugin) version of the sender
 	Warm   string `json:"warm,omitempty"`    // warm standby: "ready", or why this node could not take over fast (empty: classic mode)
 
-	Links   map[string]bool `json:"links,omitempty"`   // carrier of the sender's data devices
-	Health  string          `json:"health,omitempty"`  // non-empty: the sender (active) currently fails a health check
-	Applied string          `json:"applied,omitempty"` // hash of the last config revision the sender (standby) applied
+	Links        map[string]bool `json:"links,omitempty"`         // carrier of the sender's data devices
+	LinksUnknown []string        `json:"links_unknown,omitempty"` // data devices whose link cannot be read (a standby keeps them down)
+	Health       string          `json:"health,omitempty"`        // non-empty: the sender (active) currently fails a health check
+	Applied      string          `json:"applied,omitempty"`       // hash of the last config revision the sender (standby) applied
 
 	Busy       bool   `json:"busy,omitempty"`        // sender is in the middle of a promote/demote: the peer must not elect itself meanwhile
 	Host       string `json:"host,omitempty"`        // sender hostname, shown in the GUI so both firewalls can be told apart
@@ -133,10 +134,11 @@ func (d *Daemon) localHB() hbMsg {
 	s := d.hb.seq
 	d.hb.mu.Unlock()
 	return hbMsg{Role: st.Role, State: st.State, Epoch: st.Epoch, Seq: s, Mgmt: d.mgmtAddr(), TimeMs: time.Now().UnixMilli(), Ver: d.localVer, Plug: version,
-		Resync:  st.State == StateStandby && st.PeerFP != "" && (!activeValid(d.store.dir) || d.driftDetected()),
-		Links:   d.health.snapshotLinks(),
-		Health:  d.healthReason(),
-		Applied: st.AppliedSHA, Busy: d.opsBusy(), Warm: d.warmSummary(), Host: hostName(), MgmtProbe: d.mgmtProbe(), Maint: st.Maintenance, MaintUntil: st.MaintenanceUntil, MaintAt: st.MaintAt}
+		Resync:       st.State == StateStandby && st.PeerFP != "" && (!activeValid(d.store.dir) || d.driftDetected()),
+		Links:        d.health.snapshotLinks(),
+		LinksUnknown: d.health.snapshotUnknown(),
+		Health:       d.healthReason(),
+		Applied:      st.AppliedSHA, Busy: d.opsBusy(), Warm: d.warmSummary(), Host: hostName(), MgmtProbe: d.mgmtProbe(), Maint: st.Maintenance, MaintUntil: st.MaintenanceUntil, MaintAt: st.MaintAt}
 }
 
 func (d *Daemon) handleHB(w http.ResponseWriter, r *http.Request) {
@@ -252,7 +254,7 @@ func (d *Daemon) failover(force bool) (string, error) {
 		return "", errors.New("not paired")
 	}
 	if st.State != StateActive {
-		if _, err := d.callPeer(map[bool]string{true: "/v1/handover?force=1", false: "/v1/handover"}[force], 90*time.Second); err != nil {
+		if _, err := d.callPeer(map[bool]string{true: "/v1/handover?force=1", false: "/v1/handover"}[force], handoverTimeout); err != nil {
 			return "", fmt.Errorf("handover request to active peer failed: %w", err)
 		}
 		return "peer handed over, this node is now active", nil
@@ -284,7 +286,7 @@ func (d *Daemon) failover(force bool) (string, error) {
 		fired = true
 		sentAt = time.Now()
 		go func() {
-			_, perr = d.callPeer(fmt.Sprintf("/v1/promote?tid=%s&epoch=%d&exp=%d", tid, st.Epoch, sentAt.Add(reqTTL).UnixMilli()), 90*time.Second)
+			_, perr = d.callPeer(fmt.Sprintf("/v1/promote?tid=%s&epoch=%d&exp=%d", tid, st.Epoch, sentAt.Add(reqTTL).UnixMilli()), promoteReplyTimeout)
 			close(done)
 		}()
 	})
@@ -382,4 +384,19 @@ func (d *Daemon) opsBusy() bool {
 	}
 	d.ops.mu.Unlock()
 	return false
+}
+
+// rebase makes the silence of the peer count from now: used after this daemon was frozen, when "no heartbeat for a long time"
+// only means that nobody was listening.
+func (h *Heartbeat) rebase() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := time.Now()
+	if !h.last.IsZero() {
+		h.last = now
+	}
+	for p := range h.pathLast {
+		h.pathLast[p] = now
+	}
+	h.started = now
 }

@@ -51,3 +51,22 @@ Known and accepted:
 - **Tunnel-type interfaces** (gif, gre, wireguard, openvpn, ...) assigned as interfaces keep their configuration on a standby; their parent data interfaces are down. Review them before relying on the standby being completely silent.
 - **The update proxy** authenticates by source address only (plain HTTP on the HA link); it reaches repository hosts only. Use a dedicated HA cable.
 - **The signing key** is handed to the third-party FreeBSD VM action that builds the repository; see the release hardening notes in [building](building.md#signing).
+
+## Review of the 0.7 to 0.9 additions
+
+Reviewed with the same method as 0.5.6 (every new input, every new command run as root, every new file). Nothing critical was found; what was tightened is listed.
+
+| Addition | Input it takes | Control |
+|---|---|---|
+| `POST /v1/abort` and the transition id, epoch and validity (`exp`) on `/v1/promote` | query parameters from the paired peer | only the pinned peer certificate reaches them; `tid` must be 32 hex characters, `epoch` and `exp` are parsed as numbers and a request that is stale, expired, cancelled or repeated is refused or answered idempotently; the transition log is bounded (64 entries). The only side effect of an abort is that the node does not elect itself for 45 s |
+| `ifconfig` commands of the warm standby, run as root | device names, MAC and addresses from the configuration plan (`ifaces.php plan`), which comes from the replicated configuration | no shell: arguments are separate. The plan is re-validated in Go (`sanitize`): plain NIC names only (no LAGG, bridge, tunnel, nested VLAN), unicast non-zero MAC, `address/prefix` parsed with `net.ParseCIDR`, MTU range; anything else is not warm. The HA and management devices are never touched |
+| `hwmacs.json` (permanent MAC memory) | what `ifconfig` prints | written through the same durable, exclusive-create path as the other state files, mode 0600 |
+| `pfctl -si` and `configctl filter reload` after a promotion | none (fixed arguments) | the result decides whether the node stays active |
+| `HASYNC_SCRIPTS` and `HASYNC_PATH` (sandbox only) | the environment of the daemon | the daemon runs as root and would execute what they point to, so they are honoured only for directories that root owns and nobody else can write to (symlinks refused); otherwise they are ignored with an error in the log. Unset in production |
+| `deploy/apply-settings.sh` | the API key and the settings | the key goes to curl on stdin, never on the command line; every value is URL-encoded, so a value cannot add or change another setting |
+| `lab/sandbox` | none | for a test machine only: it creates jails and interfaces, changes one global sysctl (`net.link.bridge.pfil_member`, restored by `down.sh`) and runs the daemons against stub scripts. Never run it on a production firewall |
+
+Known and accepted, in addition to the list above:
+- A configuration push carries no epoch and the peer API has no per-message nonce; both are limited to the pinned peer by mutual TLS. The promote path now has the transition id, the epoch and the validity.
+- Two nodes without an arbiter cannot rule out a double active when both paths between them are cut while each still sees its own links (see [audit](audit.md)). Fencing is the only software-side answer and is optional.
+- The warm standby (experimental) holds the permanent MAC of each NIC on disk and changes MAC addresses at runtime; on hardware this has not been validated (see [warm standby](fast-ha.md)).

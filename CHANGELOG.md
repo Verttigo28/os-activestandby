@@ -2,6 +2,31 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 0.9.0
+Found by running the daemons against each other on a real FreeBSD 15 machine (`lab/sandbox`) and by measuring the NICs of the target hardware.
+
+### Failover on a failed network card (behaviour change)
+- **A dead card or a LAGG that lost all its ports now causes a failover on VLAN-on-LAGG and on physical NICs.** Before, the active node only switched when the standby *read* link on its own port; a standby keeps its ports down, so a VLAN on a LAGG (which follows its parent) or a NIC that drops its link when administratively down always read "no link" and the switch was refused. The standby now tells the active node which links it could not read (`links_unknown`); only a link it read and found down stops the switch. The two-switches-in-30-minutes limit and the 5 minute cool-down still apply.
+- Pre-flight warns when no interface, service or probe target is monitored (a dead card then causes no failover). `deploy/apply-settings.sh` takes `MONITOR_IFS` and `PROBE_TARGETS`; the help of *Monitored interfaces* says how to use it with a LAGG.
+
+### Recovery time and late requests
+- A promote request is only valid for 10 s (the peer refuses it 5 s later), so a request that sat in a frozen peer's socket cannot be executed after the sender has moved on. The wait for the answer is 45 s (was 90 s), and it ends early when nobody answers and no heartbeat arrives on any path. A peer that dies during a hand-over now leaves the survivor without service for about 18 s (was 54 s), a peer frozen for 70 s about 48 s (was about 91 s).
+
+### A frozen daemon
+- **A daemon that was frozen (SIGSTOP, a paused or migrated VM) no longer promotes the moment it wakes up.** It woke with a heartbeat clock saying "the peer has been silent for 95 s", promoted at once (1.2 s of double active in the sandbox) and won the arbitration. Its loop now notices that it did not run for 3 s and restarts the detection from the wake-up.
+
+### Fixes
+- The pfsync supervision read one setting per line; FreeBSD 15 prints `syncdev`, `syncpeer`, `maxupd` on one line, so it re-applied pfsync every 10 s and filled the event log. Fixed and tested against the real output.
+- Warm standby: a VLAN on a LAGG (or a bridge, or another VLAN) is never warm, an all-zero MAC is never taken for a hardware MAC, and addresses, prefixes and MTU of the plan are validated in Go as well.
+- The environment overrides used by the sandbox (`HASYNC_SCRIPTS`, `HASYNC_PATH`) are only honoured for directories owned by root and not writable by others.
+- `deploy/apply-settings.sh` URL-encodes every value and honours exported settings.
+
+### Measured on the target hardware (Supermicro, Intel X710 and I210, FreeBSD 15.1)
+- **The warm standby gains nothing on these NICs.** Changing the MAC with the link up makes the link drop for about 0.74 s (X710) to 0.9-1.9 s (I210), as much as an administrative down and up (0.8 s and 1.6 s). The X710 keeps its link while administratively down (`link_active_on_if_down`), so the classic standby does not renegotiate either. Keep the classic mode; details in `docs/fast-ha.md`.
+
+### Tools
+- `lab/sandbox`: two real daemons on one FreeBSD machine (vnet jails, epair, bridges as switches), 15 scenarios with a double-active detector (pairing, graceful and automatic failover, split-brain, pf failure, partitions, frozen peer, packet loss, dead card). `lab/warm-probe.sh` measures the NIC behaviour the warm standby depends on.
+
 ## 0.8.2
 Release pipeline fix: publishing the signed pkg repository to `gh-pages` failed because the publish step listed `.git` in `exclude_assets`, which the action applies to its own clone of the branch (it deleted the repository it had just cloned). No daemon or plugin change.
 

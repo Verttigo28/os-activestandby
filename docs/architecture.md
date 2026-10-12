@@ -32,6 +32,10 @@ Heartbeats go out several times per detection period (default 3 s, configurable 
 
 If the peer went silent and a fencing command is configured, that command must succeed first. It runs as a root-owned absolute path without a shell, and a failure blocks the promotion.
 
+A daemon that was itself frozen (a stopped process, a paused or migrated virtual machine, a starved machine) does not count the silence it slept through: if its 500 ms loop did not run for 3 s, the detection of a silent peer starts again from the wake-up, so a node that wakes up listens before it acts.
+
+On the active node, a lost link on a *monitored* interface switches the roles after the hold time, provided the standby can take over. The standby keeps its ports down, so it reports which links it could not read; a link it read and found down is the only evidence that stops the switch (the outage would only move). See [operations](operations.md#which-failures-cause-a-failover).
+
 Cold start with nobody active: the primary promotes after about 5 s, the secondary only after about 30 s. A rebooted node always boots as standby (an early rc hook rewrites the config before interfaces are configured, and a boot guard keeps VLAN/LAGG members down), then follows these rules.
 
 ## Failover pipeline
@@ -52,7 +56,7 @@ Every hand-over carries a unique transition id and the sender's epoch. The peer 
 | id still running | keeps asking (up to 45 s) |
 | no answer, or anything else | **stays standby** and reports an error; nobody serves until the election (peer alive, nobody active) or the "peer lost" rule (peer silent, fencing) or an operator decides |
 
-While it cancels an id, the peer also holds back its own election for 45 s so the two cannot race. A node never elects itself while the peer reports (heartbeat `busy` flag) that it is promoting, and automatic promotion is paused on a node that is orchestrating a failover itself.
+While it cancels an id, the peer also holds back its own election for 45 s so the two cannot race. A promote request is also only valid for 10 s after it was sent (the peer refuses it 5 s later, to allow for clock differences): a request that sat in a frozen peer's socket cannot be executed minutes later, after this node has moved on. When nobody answers and no heartbeat arrives on any path, the wait ends about 16 s after the request instead of lasting the whole 45 s, and the automatic rules (isolation guard, fencing) decide, so the survivor of a peer that died during a hand-over recovers in about 20 s. A node never elects itself while the peer reports (heartbeat `busy` flag) that it is promoting, and automatic promotion is paused on a node that is orchestrating a failover itself.
 
 A promotion is only reported as done when the packet filter is verified: if the ruleset could not be loaded or `pf` is not enabled, the promotion fails, the node returns to its standby view and the interfaces go down again (a failed promotion never leaves routed traffic without a firewall). Smaller failures (static routes) leave the node active but flagged *degraded* in the status and the event log.
 

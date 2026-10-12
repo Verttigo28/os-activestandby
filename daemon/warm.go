@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -594,6 +595,10 @@ func sanitize(p WarmPlan) WarmPlan {
 			e.Eligible, e.Reason = false, "the VLAN sits on "+e.Parent+", which is not a plain NIC"
 		case !validMAC(e.MAC) || e.V4 == "":
 			e.Eligible, e.Reason = false, "no usable shared MAC or static IPv4 address"
+		case !validCIDR(e.V4, 4) || (e.V6 != "" && !validCIDR(e.V6, 6)) || !allCIDR(e.VIPs, 4):
+			e.Eligible, e.Reason = false, "an address of the plan is not a valid address/prefix"
+		case e.MTU != 0 && (e.MTU < 576 || e.MTU > 9216):
+			e.Eligible, e.Reason = false, "the MTU is out of range"
 		}
 	}
 	return out
@@ -609,4 +614,27 @@ func validMAC(m string) bool {
 	}
 	b, _ := strconv.ParseUint(m[:2], 16, 8)
 	return b&1 == 0
+}
+
+// validCIDR: an address with a prefix of the given IP version (4 or 6). The strings end up as arguments of ifconfig (never in a shell),
+// but only well-formed addresses are accepted.
+func validCIDR(s string, version int) bool {
+	ip, n, err := net.ParseCIDR(s)
+	if err != nil || strings.ContainsAny(s, " \t\n") {
+		return false
+	}
+	if version == 4 {
+		ones, _ := n.Mask.Size()
+		return ip.To4() != nil && ones >= 1
+	}
+	return ip.To4() == nil
+}
+
+func allCIDR(l []string, version int) bool {
+	for _, s := range l {
+		if !validCIDR(s, version) {
+			return false
+		}
+	}
+	return true
 }

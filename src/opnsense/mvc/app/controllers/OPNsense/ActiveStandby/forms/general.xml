@@ -74,7 +74,7 @@
         <id>activestandby.general.monitor_interfaces</id>
         <label>Monitored interfaces</label>
         <type>select_multiple</type>
-        <help>If one of these loses its link on the active firewall while the standby still sees link on the same port, the roles are switched (after the hold time below).</help>
+        <help>If one of these loses its link on the active firewall, the roles are switched after the hold time below, unless the standby reads no link on its own port either (then the outage would only move). A standby keeps its ports down, so its link is usually not readable; that does not prevent the switch. Select every network the firewall must keep serving: with nothing selected a failed network card does not cause a failover. For VLANs on a LAGG select the VLAN interfaces: the LAGG losing all its ports takes them down, while a LAGG that keeps one port does not trigger anything.</help>
     </field>
     <field>
         <id>activestandby.general.health_services</id>

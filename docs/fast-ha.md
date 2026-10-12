@@ -1,6 +1,6 @@
 # Warm standby (experimental)
 
-**Status: implemented, opt-in, never run on real hardware.** The setting *Standby mode* = *Warm standby* turns it on; the default is *Classic* and nothing changes unless an administrator chooses it. It was built from the code and tested against a model of `ifconfig` and a switch (see the test list below), not on OPNsense, a NIC driver or a switch. Expect to tune it with real measurements (`docs/validation.md` section H). The rule behind every decision: *no speed-up may add any split-brain risk*; where that could not be shown, the classic path is kept.
+**Status: implemented, opt-in, tested against a model and in the sandbox; on real NICs the link drops at the MAC change, so it brings no gain on the Intel X710 and I210 that were measured (see below).** The setting *Standby mode* = *Warm standby* turns it on; the default is *Classic* and nothing changes unless an administrator chooses it. It was built from the code and tested against a model of `ifconfig` and a switch (see the test list below), not on OPNsense, a NIC driver or a switch. Expect to tune it with real measurements (`docs/validation.md` section H). The rule behind every decision: *no speed-up may add any split-brain risk*; where that could not be shown, the classic path is kept.
 
 ## What it does
 
@@ -50,6 +50,26 @@ The permanent MAC is `hwaddr` as printed by `ifconfig` (it appears when it diffe
 | Unknown until measured | whether the driver (ixl, igb, vmx, hn, virtio) changes the MAC with the link up without dropping it or the receive filter; whether the switch learns the shared MAC from the gratuitous ARP quickly enough or needs more; port-security (two MACs on the port group); hypervisor MAC spoofing rules; VLAN devices following their parent's MAC; `ifdisabled` behaviour per driver |
 | Not done by design | the routes step (`system_routing_configure`), `filter reload` and the services still run as in classic mode after the addresses are in; OPNsense's own interface state (files under `/tmp`, rc events such as `rc.newwanip`) is **not** refreshed on the fast path |
 | Not implemented | LAGG/LACP, bridges and tunnels, dynamic addressing, CARP, a pf ruleset preloaded on the standby (OPNsense omits interfaces without an address, so the ruleset has to be generated after the addresses exist), IPv6 router advertisements, reconciling OPNsense's interface state after the fast path |
+
+## Measured on the target hardware: the warm standby does not pay off on these NICs
+
+Supermicro machine, Intel X710 (`ixl`, firmware 9.54) and I210 (`igb`), FreeBSD 15.1, measured with `lab/warm-probe.sh` and `lab/hw-probe.sh` (one machine, a link partner on the port, the machine's own view of the carrier; the switch side was not observed):
+
+| Measurement | X710 (`ixl1`, 10G DAC) | I210 (`igb0`) |
+|---|---|---|
+| Administrative down, then up: time until the link is active again | about 0.8 s | about 1.6 s |
+| **Changing the MAC address with the link up: link lost for** | **about 0.74 s** | about 0.9 to 1.9 s |
+| `ifconfig up` on an interface that is already up | 0 ms | 0 ms |
+| Link while administratively down | **stays active** (`dev.ixl.N.link_active_on_if_down=1`) | goes down |
+| Frames sent while administratively down | none | not measured |
+
+What it means:
+
+* **Setting the shared MAC costs the same link drop as bringing the interface up.** The driver re-initialises the port when its MAC changes. A warm standby that holds its own MAC and takes the shared one at takeover therefore still drops the link for about three quarters of a second on these NICs: the saving over the classic takeover is only the PHP and the interface code, not the link.
+* On the X710 the classic standby does not renegotiate at all (the link stays active while the port is down), so the "up to 8 s of carrier wait" that motivated the warm standby does not apply to this hardware.
+* **Recommendation: keep the classic mode here.** The warm standby stays in the code, off by default, for hardware where a measurement shows a gain; with a LAGG (as in the production layout of this machine) it does not apply anyway.
+
+A variant that would avoid the bounce, a standby that already holds the shared MAC while staying completely silent, was not built: it contradicts the rule "never the same MAC on two active ports", needs the firmware LLDP agent of the X710 off (`fw_lldp=0`, it is on by default and would transmit with the shared MAC), and relies on the switch never seeing a frame from the standby. It needs a decision and a hardware test, not a guess.
 
 ## Where the time goes (what to measure)
 

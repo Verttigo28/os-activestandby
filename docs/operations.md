@@ -59,6 +59,25 @@ Settings tab (some under *advanced*):
 - **Fencing command**: a root-owned absolute path run before an automatic promotion when the peer went silent. Failure blocks the promotion.
 - **GUI logins across a failover** and **virtual MAC** are on by default.
 
+### Which failures cause a failover
+
+The heartbeat only proves that the other node's daemon and the HA link work. A broken network card on the active node leaves the heartbeat intact, so it is detected only by what is monitored:
+
+| What breaks on the active node | Detected by | Failover |
+|---|---|---|
+| Power loss, crash, hang of the whole node | silence on every heartbeat path | yes, after the detection time, if the standby can show it is not the isolated one (and the fencing command succeeds, if configured) |
+| A monitored interface loses its link: a pulled cable, a dead card, **all ports of a LAGG** (the VLANs on it lose their carrier too) | *Monitored interfaces* | yes, after the hold time (default 6 s), unless the standby **reads** no link on its own port either |
+| One port of a LAGG fails but the LAGG keeps another one | nothing: the LAGG is still up | no, by design |
+| The card has link but passes no traffic, or the upstream is down | *Probe targets* (the upstream gateway, for example) | yes, if configured |
+| Packet filter or IPsec stopped | *Health: services* | yes, after one restart attempt, if enabled |
+| An interface that is not in *Monitored interfaces* | nothing | **no**: with nothing selected a dead card causes no failover. Pre-flight warns about it |
+| Only the HA link or only the management path is lost | the other path still carries the heartbeat | no |
+| Both paths between the nodes lost while each sees its own links up | each node sees a silent peer | the standby promotes: a double active until a path returns (use a fencing command if this matters, see the audit) |
+
+The standby keeps its data ports down, so it usually **cannot read** its link; that is not treated as "no link". Only a link it could read and found down stops the switch (the outage would only move). Switches are limited to two in 30 minutes with a 5 minute cool-down, so a flapping card cannot make the roles ping-pong.
+
+For a layout where every network is a VLAN on a LAGG, select the VLAN interfaces (WAN, LAN, ...) as monitored interfaces.
+
 ## Monitoring
 
 - **Notifications**: always to syslog; webhook (JSON) at a chosen level; e-mail through Monit by adding a custom service that runs `/usr/local/opnsense/scripts/OPNsense/ActiveStandby/monit_check.sh` with the test "status != 0" (exit 0 healthy, 1 warning, 2 critical).
