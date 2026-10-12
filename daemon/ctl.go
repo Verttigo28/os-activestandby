@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const spoofScript = "/usr/local/opnsense/scripts/OPNsense/ActiveStandby/spoof_macs.php"
+var spoofScript = scriptDir + "/spoof_macs.php"
 
 func ctlAddr() (network, addr string) {
 	v := os.Getenv("HASYNC_SOCK")

@@ -41,7 +41,9 @@ func TestFenceCommandValidation(t *testing.T) {
 	good := filepath.Join(dir, "fence.sh")
 	os.WriteFile(good, []byte("#!/bin/sh\nexit 0\n"), 0o755)
 	os.Chmod(good, 0o755)
-	if err := validateFenceCommand(good); err != nil && !strings.Contains(err.Error(), "owned by root") {
+	// the temporary directory sits under /tmp, which anyone can write to: run as root the validator rightly refuses it for
+	// that reason, run as a user it refuses it because the file is not owned by root; neither is what this checks
+	if err := validateFenceCommand(good); err != nil && !strings.Contains(err.Error(), "owned by root") && !strings.Contains(err.Error(), "writable by group or others") {
 		t.Errorf("good command rejected: %v", err)
 	}
 	bad := filepath.Join(dir, "w.sh")

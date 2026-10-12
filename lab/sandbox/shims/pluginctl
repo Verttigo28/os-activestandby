@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "$(/bin/date +%s) pluginctl $*" >> "$SBXNODE/shim.log"
+case "$1" in -S) echo "{}" ;; esac
+exit 0

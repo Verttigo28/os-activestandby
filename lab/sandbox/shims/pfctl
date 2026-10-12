@@ -1,0 +1,5 @@
+#!/bin/sh
+case "$1" in
+-si) if [ -f "$SBXNODE/pf_disabled" ]; then echo "Status: Disabled for 0 days 00:00:01          Debug: Urgent"; else echo "Status: Enabled for 0 days 00:10:00           Debug: Urgent"; fi ;;
+*) exec /sbin/pfctl "$@" ;;
+esac

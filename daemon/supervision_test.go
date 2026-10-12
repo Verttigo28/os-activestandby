@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -45,11 +46,17 @@ func TestPackageReportIsNotAFalseAllClear(t *testing.T) {
 
 const pfsyncGood = "pfsync0: flags=41<UP,RUNNING> metric 0 mtu 1500\n\tsyncdev: em1\n\tsyncpeer: 10.0.0.2\n\tmaxupd: 128 defer: off\n\tgroups: pfsync\n"
 
+// the real output of FreeBSD 15.1 (captured on a test machine): all settings on one line
+const pfsyncGood15 = "pfsync0: flags=1000041<UP,RUNNING,LOWER_UP> metric 0 mtu 1500\n\toptions=0\n\tsyncdev: em1 syncpeer: 10.0.0.2 maxupd: 128 defer: off version: 1500\n\tsyncok: 0\n\tgroups: pfsync\n"
+
 func TestPfsyncProblemDetection(t *testing.T) {
 	cases := []struct {
 		name, out, want string
 	}{
 		{"configured as expected", pfsyncGood, ""},
+		{"configured as expected (FreeBSD 15, one line)", pfsyncGood15, ""},
+		{"FreeBSD 15 format, wrong peer", strings.Replace(pfsyncGood15, "10.0.0.2", "10.0.0.9", 1), "pfsync0 does not sync with 10.0.0.2"},
+		{"FreeBSD 15 format, other device", strings.Replace(pfsyncGood15, "em1", "em7", 1), "pfsync0 does not use em1 as sync device"},
 		{"interface missing", "", "pfsync0 does not exist"},
 		{"down", "pfsync0: flags=0<> metric 0 mtu 1500\n\tsyncdev: em1\n\tsyncpeer: 10.0.0.2\n", "pfsync0 is down"},
 		{"no sync device", "pfsync0: flags=41<UP,RUNNING> metric 0 mtu 1500\n\tsyncpeer: 10.0.0.2\n", "pfsync0 does not use em1 as sync device"},

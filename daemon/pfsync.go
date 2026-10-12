@@ -111,13 +111,16 @@ func pfsyncProblem(ifconfigOut, dev, peer string) string {
 		return "pfsync0 is down"
 	}
 	var gotDev, gotPeer string
+	// FreeBSD 15 prints several settings on one line ("syncdev: em1 syncpeer: 10.0.0.2 maxupd: 128 ..."), older releases one per
+	// line: look at every field
 	for _, l := range lines[1:] {
-		if f := strings.Fields(l); len(f) >= 2 {
-			switch f[0] {
+		f := strings.Fields(l)
+		for i := 0; i+1 < len(f); i++ {
+			switch f[i] {
 			case "syncdev:":
-				gotDev = f[1]
+				gotDev = f[i+1]
 			case "syncpeer:":
-				gotPeer = f[1]
+				gotPeer = f[i+1]
 			}
 		}
 	}

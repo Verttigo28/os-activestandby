@@ -11,7 +11,7 @@ func main() {
 	// inherit it and create world-writable files
 	setProcessUmask(0o022)
 	// rc, ssh and configd start us with different search paths; the tools we call live in /usr/local/{s,}bin
-	os.Setenv("PATH", "/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin")
+	os.Setenv("PATH", envOr("HASYNC_PATH", "/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin"))
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: hasyncd daemon | ctl <cmd> | version")
 		os.Exit(2)

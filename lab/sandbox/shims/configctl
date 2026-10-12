@@ -1,0 +1,6 @@
+#!/bin/sh
+echo "$(/bin/date +%s) configctl $*" >> "$SBXNODE/shim.log"
+case "$*" in
+"filter reload") if [ -f "$SBXNODE/filter_fail" ]; then echo "Error: injected filter failure"; exit 1; fi ;;
+esac
+echo OK

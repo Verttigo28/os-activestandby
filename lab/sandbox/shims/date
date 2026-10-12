@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "$(/bin/date +%s) date $*" >> "$SBXNODE/shim.log"
+exit 0

@@ -18,10 +18,9 @@ import (
 // settings in their silent standby form, and a one-time pairing token. The secondary opens its pairing window with
 // that token on start; the primary keeps trying to pair with it (Kit in the state file) until it answers.
 
-const (
-	kitScript = "/usr/local/opnsense/scripts/OPNsense/ActiveStandby/kit_build.php"
-	kitTTL    = 48 * time.Hour
-)
+var kitScript = scriptDir + "/kit_build.php"
+
+const kitTTL = 48 * time.Hour
 
 var (
 	hostRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)

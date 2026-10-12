@@ -27,7 +27,7 @@ import (
 // derives the standby view for config.xml, reloads pf only, and acks. Any failure rolls back to the previous
 // good files and is reported to the active node (and shown in the GUI). Data interfaces are never touched.
 
-const mergeScript = "/usr/local/opnsense/scripts/OPNsense/ActiveStandby/merge_config.php"
+var mergeScript = scriptDir + "/merge_config.php"
 
 func shaHex(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
