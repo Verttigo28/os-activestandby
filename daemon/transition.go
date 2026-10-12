@@ -40,6 +40,10 @@ var tidRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var (
 	resolveEvery  = time.Second
 	resolveWindow = 45 * time.Second
+	// A promote request is valid for reqTTL after it was sent (the peer refuses it later, allowing reqSkew for clock differences):
+	// a request that sat in a frozen peer's socket buffer must not be executed minutes later, when this node has long moved on.
+	reqTTL  = 10 * time.Second
+	reqSkew = 5 * time.Second
 	// abortHold: after it cancelled a transition the peer (this node) does not elect itself active on its own for a while,
 	// the requester is about to take its role back.
 	abortHold = 45 * time.Second
@@ -123,6 +127,12 @@ func (d *Daemon) handlePromote(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 409, map[string]string{"error": "stale epoch"})
 		return
 	}
+	// a request that arrives after its validity ran out was delayed (frozen peer, queued connection): the sender has given up on it
+	if ms, err := strconv.ParseInt(q.Get("exp"), 10, 64); err == nil && time.Now().After(time.UnixMilli(ms).Add(reqSkew)) {
+		d.event("warning", "ignored an expired promote request (it was valid until %s)", time.UnixMilli(ms).UTC().Format(time.RFC3339))
+		writeJSON(w, 409, map[string]string{"error": "request expired"})
+		return
+	}
 	if tid != "" {
 		switch s := d.tx.begin(tid); s {
 		case "":
@@ -181,7 +191,7 @@ const (
 )
 
 // resolveTransition asks the peer what became of tid until the answer is conclusive or the window is over.
-func (d *Daemon) resolveTransition(tid string) (txOutcome, string) {
+func (d *Daemon) resolveTransition(tid string, sentAt time.Time) (txOutcome, string) {
 	deadline := time.Now().Add(resolveWindow)
 	last := "no answer from the peer"
 	for {
@@ -202,6 +212,11 @@ func (d *Daemon) resolveTransition(tid string) (txOutcome, string) {
 			}
 		} else {
 			last = err.Error()
+			// nobody answers AND no heartbeat arrives on any path: the peer is down or cut off, which the automatic rules (isolation
+			// guard, fencing) handle. Waiting longer only delays them, but only once its late request can no longer be executed.
+			if alive, _, _ := d.hb.Snapshot(); !alive && time.Since(sentAt) > reqTTL+reqSkew+time.Second {
+				return outcomeUnknown, last + "; silent on every heartbeat path and its request has expired"
+			}
 		}
 		if time.Now().After(deadline) {
 			return outcomeUnknown, last

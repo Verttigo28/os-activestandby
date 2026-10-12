@@ -42,9 +42,9 @@ stop_daemon() { # kill -9 style: no goodbye
 daemon_up() { [ -S "$SBX/$1/ctl.sock" ]; }
 
 # does node $1 hold the shared identity on tst0 (shared MAC and the LAN address)?
-owns() {
+owns() { # the interface must be UP: a powered-off node keeps its addresses on a down interface and serves nothing
 	o=$(jx "$1" ifconfig tst0 2>/dev/null)
-	echo "$o" | grep -qi "ether $SHARED_LAN_MAC" && echo "$o" | grep -q "inet $LAN_IP "
+	echo "$o" | head -1 | grep -q "<UP," && echo "$o" | grep -qi "ether $SHARED_LAN_MAC" && echo "$o" | grep -q "inet $LAN_IP "
 }
 mac_of() { jx "$1" ifconfig "$2" 2>/dev/null | awk '$1=="ether"{print $2; exit}'; }
 has_ip() { jx "$1" ifconfig "$2" 2>/dev/null | grep -q "inet $3 "; }

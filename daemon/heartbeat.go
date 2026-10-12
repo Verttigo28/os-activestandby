@@ -279,10 +279,12 @@ func (d *Daemon) failover(force bool) (string, error) {
 	var perr error
 	done := make(chan struct{})
 	fired := false
+	var sentAt time.Time
 	derr := d.doDemote("failover "+tid[:8], func() {
 		fired = true
+		sentAt = time.Now()
 		go func() {
-			_, perr = d.callPeer(fmt.Sprintf("/v1/promote?tid=%s&epoch=%d", tid, st.Epoch), 90*time.Second)
+			_, perr = d.callPeer(fmt.Sprintf("/v1/promote?tid=%s&epoch=%d&exp=%d", tid, st.Epoch, sentAt.Add(reqTTL).UnixMilli()), 90*time.Second)
 			close(done)
 		}()
 	})
@@ -312,7 +314,7 @@ func (d *Daemon) failover(force bool) (string, error) {
 
 	// no usable answer: ask the peer what became of the transition instead of guessing
 	d.event("warning", "failover %s: no confirmation from the peer (%v); checking what the peer did", tid[:8], perr)
-	outcome, detail := d.resolveTransition(tid)
+	outcome, detail := d.resolveTransition(tid, sentAt)
 	switch outcome {
 	case outcomePeerActive:
 		d.event("change", "failover %s: the peer is active (%s); this node stays standby", tid[:8], detail)

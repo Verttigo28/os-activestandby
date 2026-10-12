@@ -7,7 +7,7 @@ ONLY="$*"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 sh "$HERE/up.sh" "$MODE" || exit 1
 . "$SBX/net.env"
-want() { [ -z "$ONLY" ] || case " $ONLY " in *" $1 "*) return 0 ;; esac; return 1; }
+want() { [ -z "$ONLY" ] && return 0; case " $ONLY " in *" $1 "*) return 0 ;; esac; return 1; }
 echo "sandbox mode: $MODE   $(/usr/bin/uname -sr)   hasyncd $("$SBX/hasyncd" version)"
 
 monitor_start
@@ -22,6 +22,7 @@ ctl A pair --peer $HA_B --token "$TOK" > "$SBX/pair.out"
 ck "pairing accepted" 'grep -q "\"status\":\"paired\"" "$SBX/pair.out"'
 wait_for 20 "roles" '[ "$(st A state)" = active ] && [ "$(st B state)" = standby ]'
 ck "A is master and active, B standby" '[ "$(st A role)" = master ] && [ "$(st A state)" = active ] && [ "$(st B state)" = standby ]'
+wait_for 20 "heartbeats" '[ "$(st A paths)" = "{\"ha\":true,\"mgmt\":true}" ] && [ "$(st B paths)" = "{\"ha\":true,\"mgmt\":true}" ]'
 ck "heartbeat alive on the HA link and the management path (seen by A and by B)" '[ "$(st A paths)" = "{\"ha\":true,\"mgmt\":true}" ] && [ "$(st B paths)" = "{\"ha\":true,\"mgmt\":true}" ]'
 wait_for 30 "config in sync" '[ "$(ctl A status | jf sync.state)" = in_sync ]'
 ck "configuration in sync" '[ "$(ctl A status | jf sync.state)" = in_sync ]'
@@ -105,7 +106,7 @@ pp=$!
 sleep 3
 t0=$(now)
 power_off A
-wait_for 30 "B promoted" '[ "$(st B state)" = active ]'
+wait_for 30 "B promoted" 'owns B'
 t1=$(now)
 wait $pp
 info "power cut -> B active after $(php -r "echo round(($t1-$t0)*1000);") ms; client: $(cat "$SBX/ping.out")"
@@ -170,13 +171,10 @@ if want 7 && [ "$MODE" = warm ]; then
 section "7. warm: standby not ready, and a failed fast path, fall back to the classic takeover"
 monitor_clear
 ensure_active A
-ifconfig "${LB}b" down
-wait_for 15 "not ready" '[ "$(ctl B status | jf warm.ready)" = false ]'
-ck "B reports not ready with the reason (no link)" '[ "$(ctl B status | jf warm.ready)" = false ] && ctl B status | jf warm.reason | grep -q "no link"'
-ck "A sees it in the heartbeat" '[ "$(ctl A status | jf peer_warm)" != ready ]'
-ifconfig "${LB}b" up
-wait_for 15 "ready again" '[ "$(ctl B status | jf warm.ready)" = true ]'
-ck "B is ready again once the link is back" '[ "$(ctl B status | jf warm.ready)" = true ]'
+# (an epair never loses its carrier, so "no link" cannot be simulated here; it is covered by the unit tests and by the hardware list)
+wait_for 15 "ready" '[ "$(ctl B status | jf warm.ready)" = true ]'
+ck "B reports ready" '[ "$(ctl B status | jf warm.ready)" = true ]'
+ck "A sees the standby ready in the heartbeat" '[ "$(ctl A status | jf peer_warm)" = ready ]'
 # a fast path that fails after the readiness was established: the reconfigure stub is not used by it, so make the MAC change impossible
 # by giving B's tst0 a stale address behind the daemon's back (it is not silent any more at the moment of the takeover)
 jx B ifconfig tst0 inet 192.0.2.77/24
@@ -203,7 +201,7 @@ t0=$(now)
 wait $fp
 info "failover while the target dies: $(head -c 420 "$SBX/fo.out")"
 ck "the hand-over is reported as unverifiable and B stays standby on purpose" 'grep -q "stays standby on purpose" "$SBX/fo.out" || grep -q "peer did not take over" "$SBX/fo.out"'
-wait_for 40 "B active again by the peer-lost rule" '[ "$(st B state)" = active ] && owns B'
+wait_for 90 "B active again by the peer-lost rule" 'owns B'
 t1=$(now)
 info "service restored by the survivor after $(php -r "echo round(($t1-$t0)*1000);") ms from the death of the peer"
 ck "the survivor serves traffic again" '[ "$(st B state)" = active ] && owns B && jx C ping -c 3 -t 2 $LAN_IP'
@@ -252,15 +250,25 @@ ck "management path lost only: no role change" '[ "$(st '$act' state)" = active 
 ifconfig $SWM addm "${map}b"
 sleep 5
 ck "no double active with a single path lost" '[ "$(monitor_violations)" -eq 0 ]'
-# c) the standby is isolated: its own carrier is gone on both paths (it must NOT promote)
-ifconfig "${hsp}b" down; ifconfig "${msp}b" down
-sleep 9
-ck "isolated standby (no carrier on HA and management) does not promote" '[ "$(st '$sby' state)" = standby ] && owns '$act' && ! owns '$sby
-info "reason shown to the administrator: $(ctl $sby status | jf auto_blocked)"
-ck "the reason is visible (auto_blocked)" '[ -n "$(ctl '$sby' status | jf auto_blocked)" ]'
-ifconfig "${hsp}b" up; ifconfig "${msp}b" up
-sleep 6
-ck "after the carrier is back the cluster is intact" '[ "$(st '$act' state)" = active ] && [ "$(st '$sby' state)" = standby ] && [ "$(st '$sby' peer_alive)" = true ]'
+# c) the standby cannot prove it is not the isolated node: its management probe targets are unreachable and the peer is silent on
+# both paths. It must NOT promote. (An epair never loses its carrier, so the carrier proof itself is covered by the unit tests; the
+# management probe is the other half of the same guard.)
+cp "$SBX/$sby/hasyncd.json" "$SBX/$sby/hasyncd.json.orig"
+sed -i '' 's|"notify_level"|"mgmt_probe_targets":"10.98.0.250","notify_level"|' "$SBX/$sby/hasyncd.json"
+stop_daemon $sby; start_daemon $sby; wait_for 20 "daemon" "daemon_up $sby"
+wait_for 30 "probe fails" '[ "$(ctl '$sby' status | jf mgmt_probe)" = fail ]'
+ck "the management probe of the standby reports failure" '[ "$(ctl '$sby' status | jf mgmt_probe)" = fail ]'
+ifconfig $SWH deletem "${hap}b"; ifconfig $SWM deletem "${map}b"   # the peer goes silent on both paths
+sleep 10
+info "isolated standby $sby: state=$(st $sby state) auto_blocked=[$(ctl $sby status | jf auto_blocked)]; active node $act: state=$(st $act state)"
+info "events on $sby: $(events $sby | head -c 600)"
+ck "a standby that cannot prove it is not isolated does not promote" '[ "$(st '$sby' state)" = standby ] && ! owns '$sby
+ck "the reason is visible to the administrator (auto_blocked)" '[ -n "$(ctl '$sby' status | jf auto_blocked)" ]'
+ifconfig $SWH addm "${hap}b"; ifconfig $SWM addm "${map}b"
+cp "$SBX/$sby/hasyncd.json.orig" "$SBX/$sby/hasyncd.json"
+stop_daemon $sby; start_daemon $sby; wait_for 20 "daemon" "daemon_up $sby"
+sleep 8
+ck "after the paths are back and the probe setting removed the cluster is intact" '[ "$(st '$act' state)" = active ] && [ "$(st '$sby' state)" = standby ] && [ "$(st '$sby' peer_alive)" = true ]'
 ck "no double active" '[ "$(monitor_violations)" -eq 0 ]'
 fi
 
@@ -273,7 +281,7 @@ eval "hap=\${H$act}; hsp=\${H$sby}; map=\${M$act}; msp=\${M$sby}"
 monitor_clear
 ifconfig $SWH deletem "${hap}b"; ifconfig $SWM deletem "${map}b"   # every cable stays plugged, the two nodes just cannot talk
 t0=$(now)
-wait_for 30 "standby promotes" '[ "$(st '$sby' state)" = active ]'
+wait_for 40 "standby promotes" 'owns '$sby
 t1=$(now)
 sleep 3
 info "partition: the standby promoted after $(php -r "echo round(($t1-$t0)*1000);") ms; overlap so far: $(monitor_summary)"

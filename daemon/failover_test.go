@@ -761,3 +761,79 @@ func TestDegradedIsAccumulatedAndClearable(t *testing.T) {
 		t.Fatal("not cleared")
 	}
 }
+
+// ---- late delivery and recovery time (found with the sandbox: lab/sandbox, scenarios 8 and 14) ----
+
+func TestExpiredPromoteRequestIsRefused(t *testing.T) {
+	b := newHANode(t, standbyState(RoleStandby, 6))
+	var fb fakeSystem
+	fb.install(b)
+	late := time.Now().Add(-time.Minute).UnixMilli() // sat in a frozen peer's socket buffer for a minute
+	if _, err := deliver(b, fmt.Sprintf("/v1/promote?tid=%s&epoch=7&exp=%d", newTID(), late)); err == nil {
+		t.Fatal("a request whose validity ran out was executed")
+	}
+	if fb.promotes.Load() != 0 || b.store.Get().State != StateStandby {
+		t.Fatal("the late request promoted the node")
+	}
+	// within the allowed clock difference it is still valid, and a request without validity (older peers) keeps working
+	edge := time.Now().Add(-reqSkew / 2).UnixMilli()
+	if _, err := deliver(b, fmt.Sprintf("/v1/promote?tid=%s&epoch=7&exp=%d", newTID(), edge)); err != nil {
+		t.Fatalf("a request just past its time but within the skew must be accepted: %v", err)
+	}
+	b2 := newHANode(t, standbyState(RoleStandby, 6))
+	var fb2 fakeSystem
+	fb2.install(b2)
+	if _, err := deliver(b2, "/v1/promote?tid="+newTID()+"&epoch=7"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func shortRequestValidity(t *testing.T) {
+	t.Helper()
+	oldTTL, oldSkew := reqTTL, reqSkew
+	reqTTL, reqSkew = 5*time.Millisecond, 0
+	t.Cleanup(func() { reqTTL, reqSkew = oldTTL, oldSkew })
+}
+
+func TestSilentUnreachablePeerEndsTheWaitEarly(t *testing.T) {
+	fastResolve(t)
+	shortRequestValidity(t)
+	resolveWindow = 5 * time.Second // the window itself is long: the early exit must not wait for it
+	a := newHANode(t, activeState(RoleMaster, 7))
+	a.act.peerCall = func(string, time.Duration) (map[string]any, error) { return nil, errors.New("no route to host") }
+	silence(a, time.Hour) // no heartbeat on any path
+	t0 := time.Now()
+	out, detail := a.resolveTransition(newTID(), time.Now().Add(-5*time.Second)) // the request was sent long enough ago to have expired
+	if out != outcomeUnknown || time.Since(t0) > time.Second {
+		t.Fatalf("outcome %v after %v (%s): a dead peer must not keep the survivor waiting for the whole window", out, time.Since(t0), detail)
+	}
+}
+
+func TestSilentPeerIsNotGivenUpOnBeforeItsRequestExpired(t *testing.T) {
+	fastResolve(t)
+	// default validity (10 s + 5 s): a request sent just now may still be executed by a peer that comes back
+	resolveWindow = 300 * time.Millisecond
+	a := newHANode(t, activeState(RoleMaster, 7))
+	a.act.peerCall = func(string, time.Duration) (map[string]any, error) { return nil, errors.New("timeout") }
+	silence(a, time.Hour)
+	t0 := time.Now()
+	out, _ := a.resolveTransition(newTID(), time.Now())
+	if out != outcomeUnknown || time.Since(t0) < resolveWindow {
+		t.Fatalf("returned after %v: the wait must last for the window while the request can still be executed", time.Since(t0))
+	}
+}
+
+func TestAnAnsweringButSlowPeerKeepsBeingAsked(t *testing.T) {
+	fastResolve(t)
+	shortRequestValidity(t)
+	resolveWindow = 200 * time.Millisecond
+	a := newHANode(t, activeState(RoleMaster, 7))
+	var polls atomic.Int32
+	a.act.peerCall = func(string, time.Duration) (map[string]any, error) { polls.Add(1); return nil, errors.New("timeout") }
+	seePeer(a, hbMsg{State: StateStandby}) // heartbeats arrive: the peer is alive, only this call fails
+	t0 := time.Now()
+	out, _ := a.resolveTransition(newTID(), time.Now().Add(-time.Minute))
+	if out != outcomeUnknown || time.Since(t0) < resolveWindow || polls.Load() < 3 {
+		t.Fatalf("a live peer must be asked until the window is over: %v after %v, %d polls", out, time.Since(t0), polls.Load())
+	}
+}
