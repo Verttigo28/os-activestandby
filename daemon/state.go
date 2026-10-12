@@ -52,7 +52,8 @@ type State struct {
 }
 
 type Store struct {
-	mu   sync.Mutex
+	mu   sync.Mutex   // serialises writers (it is held across the fsync of a save)
+	rd   sync.RWMutex // protects data only: readers never wait for the disk, so a slow disk cannot silence the heartbeat
 	dir  string
 	data State
 }
@@ -111,16 +112,18 @@ func openStore() (*Store, error) {
 }
 
 func (s *Store) Get() State {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.rd.RLock()
+	defer s.rd.RUnlock()
 	return s.data
 }
 
 func (s *Store) Update(f func(*State)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.rd.Lock()
 	f(&s.data)
 	b, err := json.MarshalIndent(s.data, "", "  ")
+	s.rd.Unlock()
 	if err != nil {
 		return err
 	}

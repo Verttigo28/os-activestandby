@@ -2,6 +2,27 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 0.6.0
+Production-readiness and usability release (review of every feature, setting and screen).
+
+### Production fixes
+- A takeover now waits for the link of real NICs (carrier, up to 8 s) before it announces the MAC, repeats the announcement for a few seconds and only then starts gateway monitoring.
+- OpenVPN server/client interfaces (`ovpns`, `ovpnc`) no longer make a takeover fail. An HA or management VLAN/LAGG that shares its trunk with data VLANs is no longer cut on the standby.
+- A boot that could not write the standby view (disk full, read-only config) is still guarded: every paired node comes up silent. A demote refuses when the saved configuration lacks the HA settings (restored backup) instead of cutting the HA link.
+- When the HA link is down but the management path is alive, switchovers and hand-overs use the management path instead of failing after the interfaces went down.
+- The state file no longer blocks heartbeats while it is written to disk (a slow disk could cause a false failover); the standby no longer re-reads its saved configuration on every heartbeat. Default detection time is now 3 s.
+- Services that bind to interface addresses (NTP, captive portal, Suricata, HAProxy, Dynamic DNS) are restarted after a takeover when installed; WireGuard is kept down on the standby.
+- Newly pinned shared MACs are applied on the running node (the pattern that finds the interface keys was broken).
+- The wizard and the pre-flight warn when there is no management interface (no automatic takeover after a power loss over a direct cable). Documented requirements and limitations (PPPoE, IPv6, switch settings).
+
+### Usability
+- Settings grouped under headings with clearer names and help, shared versus per-firewall settings marked, monitored interfaces chosen from a list, stricter IP validation, warnings on risky settings.
+- Wizard: confirmation before a firewall becomes the secondary and before the kit download, no preselected role, automatic checks, remembers the saved choice, countdown and cancel for the pairing window; hidden once paired.
+- Status page: clear state when the daemon is not running or the firewall does not answer, no reload that throws away the wizard or unsaved settings, a maintenance switch on the standby page, double-click protection on failover and save, clearer confirmations, full certificate fingerprint.
+- Operations: feedback for maintenance mode, readable pre-flight (failures first), confirmation for cancelling an upgrade, real polling for the update check, empty states.
+- Event log readable in the dark theme; status-bar notice also flags maintenance mode, failed sync, a silent peer, drift and version differences; dashboard widget no longer leaves stale rows and reports a stopped daemon.
+- Separate operator and administrator privileges are documented under their exact names.
+
 ## 0.5.6
 Security release (full audit of the daemon, the GUI and scripts, the CI and supply chain):
 - **Loose umask** (high): the daemon could inherit umask 0 from whatever started it, so the PHP helpers it runs created world-writable files such as `php.ini`, `monitrc` and `dnsmasq.conf`. The daemon now fixes its umask, creates its control socket under a strict umask, and the lab deploy no longer leaves 777 directories.

@@ -15,7 +15,7 @@ import (
 const biocsetif = 0x8020426c // _IOW('B', 108, struct ifreq)
 
 // announce sends gratuitous ARPs (RFC 5227 announcement form) for every IPv4 address of dev
-// through a raw bpf write: immediately, then twice more 100 ms apart in the background.
+// through a raw bpf write: immediately, then five more times 500 ms apart in the background.
 func announce(dev string) {
 	ifc, err := net.InterfaceByName(dev)
 	if err != nil || len(ifc.HardwareAddr) != 6 {
@@ -49,8 +49,8 @@ func announce(dev string) {
 	// the first announcement goes out at once; the repeats run in the background so promote does not wait for them
 	go func() {
 		defer f.Close()
-		for i := 0; i < 2; i++ {
-			time.Sleep(100 * time.Millisecond)
+		for i := 0; i < 5; i++ { // repeats for a few seconds: the switch may learn the port only after the first frames
+			time.Sleep(500 * time.Millisecond)
 			for _, fr := range frames {
 				f.Write(fr)
 			}

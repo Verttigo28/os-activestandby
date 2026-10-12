@@ -41,7 +41,7 @@ OPNsense's built-in HA uses CARP: every interface needs three addresses, the sta
    ```sh
    pkg add os-activestandby-<version>.pkg
    ```
-2. On the primary: **System > Active/Standby HA > Setup wizard**, pick the HA link (a dedicated cable, static IPv4) and an optional management interface.
+2. On the primary: **System > Active/Standby HA > Setup wizard**, pick the HA link (a dedicated cable, static IPv4) and a management interface (strongly recommended).
 3. Step 3 **Automatic**: enter hostname and HA address of the second firewall, download the kit, restore it on the second firewall (System > Configuration > Backups), reboot it. Pairing happens on its own.
 
    Or pair manually with a one-time token (wizard on both nodes).
@@ -75,7 +75,7 @@ Setup: [docs/building.md](docs/building.md#signing).
 ## Requirements and limits
 
 - OPNsense 26.7 or newer (FreeBSD 15), two machines with identical NIC names, same OPNsense and plugin versions. Pairing refuses anything else.
-- Static IPv4 on the shared interfaces. DHCP/PPPoE WANs work only where the provider tolerates the MAC and a short re-login. IPv6 neighbour announcements are not implemented.
+- Static IPv4 on the shared interfaces. PPPoE and IPv6 failover are not supported, DHCP on the WAN is best effort; see [operations](docs/operations.md#requirements-and-limitations-in-production).
 - Not for use together with the built-in CARP/XMLRPC HA.
 - Releases carry a signed build attestation and SHA-256 checksums; a signed pkg repository is supported, see [building](docs/building.md#signing).
 

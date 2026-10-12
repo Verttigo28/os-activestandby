@@ -67,6 +67,9 @@ func (d *Daemon) localChecks() []Check {
 	if st.PeerFP == "" {
 		return []Check{fail("pairing", "this node is not paired")}
 	}
+	if d.mgmtAddr() == "" && !d.cfg.AllowHAOnly {
+		cs = append(cs, warn("management path", "no management interface: after a power loss of the other firewall this one cannot prove it is not the isolated node and will not take over by itself (add a management interface, or allow it under Settings > Safety)"))
+	}
 	switch d.mgmtProbe() {
 	case "ok":
 		cs = append(cs, pass("management probe", "this node reaches its management probe targets"))

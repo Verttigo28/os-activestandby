@@ -15,7 +15,7 @@ func (d *Daemon) enforceLoop() {
 		if tick%60 == 1 {
 			hardenFiles(d.store.dir)
 		}
-		writeRoleMarker(d.store.Get())
+		d.markerStep()
 		d.ensureConfigLock()
 		if d.store.Get().State != StateStandby {
 			continue
@@ -66,6 +66,9 @@ func (d *Daemon) enforceServices() {
 		if _, err := sh("pgrep", "-x", p); err == nil {
 			running = append(running, p)
 		}
+	}
+	if out, err := sh("wg", "show", "interfaces"); err == nil && strings.TrimSpace(out) != "" {
+		running = append(running, "wireguard") // a standby must not complete handshakes with the peers of the shared key
 	}
 	if len(running) == 0 {
 		return

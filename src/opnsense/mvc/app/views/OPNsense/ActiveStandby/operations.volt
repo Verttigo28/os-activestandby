@@ -29,7 +29,7 @@
         </p>
         <div class="checkbox"><label><input type="checkbox" id="opFailback"/> {{ lang._('Give the active role back to the original node at the end') }}</label></div>
         <button class="btn btn-danger" id="opUpStart">{{ lang._('Start guided upgrade') }}</button>
-        <button class="btn btn-default" id="opUpCancel" style="display:none">{{ lang._('Cancel') }}</button>
+        <button class="btn btn-default" id="opUpCancel" style="display:none">{{ lang._('Cancel upgrade') }}</button>
         <div id="opUpRes" class="alert" style="display:none; margin-top:10px"></div>
         <div id="opUpJob" style="display:none; margin-top:10px">
             <ol id="opUpPhases" class="list-unstyled" style="line-height:1.9"></ol>
@@ -69,17 +69,32 @@ $(function () {
             $('#opMaint').attr('class', 'label label-' + (on ? 'warning' : 'default')).text(on ? '{{ lang._('ON until') }} ' + (s.maintenance_until || '').replace('T', ' ').replace('Z', ' UTC') : '{{ lang._('off') }}');
         });
     }
+    function maintAnswer(r) {
+        $('#opMaintOn, #opMaintOff').prop('disabled', false);
+        const bad = !r || r.error || !r.status;
+        $('#opMaintRes').attr('class', 'alert ' + (bad ? 'alert-danger' : 'alert-success')).text(bad ? ((r && r.error) || '{{ lang._('No answer from the firewall.') }}') : '{{ lang._('Done.') }}').show();
+        setTimeout(function () { $('#opMaintRes').fadeOut(); }, 5000);
+        refreshMaint();
+    }
     $('#opMaintOn').click(function () {
-        ajaxCall('/api/activestandby/pairing/maintenance', {on: '1', hours: $('#opHours').val()}, function (r) { refreshMaint(); });
+        $('#opMaintOn, #opMaintOff').prop('disabled', true);
+        ajaxCall('/api/activestandby/pairing/maintenance', {on: '1', hours: $('#opHours').val()}, maintAnswer);
     });
     $('#opMaintOff').click(function () {
-        ajaxCall('/api/activestandby/pairing/maintenance', {on: '0'}, function (r) { refreshMaint(); });
+        $('#opMaintOn, #opMaintOff').prop('disabled', true);
+        ajaxCall('/api/activestandby/pairing/maintenance', {on: '0'}, maintAnswer);
     });
 
     $('#opPre').click(function () {
         $('#opPreSum').html('<i class="fa fa-spinner fa-spin"></i>');
         $('#opPreOut').empty();
         ajaxGet('/api/activestandby/pairing/preflight', {}, function (r) {
+            if (!r || r.error || !r.summary) {
+                $('#opPreSum').html('<span class="label label-danger">{{ lang._('ERROR') }}</span> ' + esc((r && r.error) || '{{ lang._('No answer from the firewall.') }}'));
+                return;
+            }
+            const order = {fail: 0, warn: 1, pass: 2};
+            ['this_node', 'peer', 'dry_run'].forEach(k => { if (r[k]) { r[k].sort((a, b) => (order[a.status] - order[b.status])); } });
             $('#opPreSum').html('<span class="label label-' + (lbl[r.summary] || 'default') + '">' + esc((r.summary || '?').toUpperCase()) + '</span>');
             const sec = (title, list) => !list || !list.length ? '' :
                 '<h4>' + title + '</h4><table class="table table-condensed" style="max-width:900px"><tbody>' +
@@ -90,8 +105,8 @@ $(function () {
 
     function refreshHistory() {
         ajaxGet('/api/activestandby/pairing/history', {}, function (r) {
-            $('#opHist tbody').html((r.history || []).map(h =>
-                '<tr><td>' + esc(h.time.replace('T', ' ').replace('Z', '')) + '</td><td>' + (h.type === 'promote' ? '{{ lang._('became ACTIVE') }}' : '{{ lang._('became STANDBY') }}') +
+            $('#opHist tbody').html((r.history && r.history.length ? r.history : [{time: '', empty: true}]).map(h =>
+                h.empty ? '<tr><td colspan="4" class="text-muted">{{ lang._('No role changes recorded yet.') }}</td></tr>' : '<tr><td>' + esc(h.time.replace('T', ' ').replace('Z', '')) + '</td><td>' + (h.type === 'promote' ? '{{ lang._('became ACTIVE') }}' : '{{ lang._('became STANDBY') }}') +
                 '</td><td>' + (h.duration_ms / 1000).toFixed(1) + ' s</td><td>' + esc(h.reason) + '</td></tr>').join(''));
         });
     }
@@ -108,9 +123,21 @@ $(function () {
             applyUpStart();
         });
     }
+    let lastCheckSeen = '';
     $('#opUpdCheck').click(function () {
+        const btn = $(this).prop('disabled', true);
         $('#opUpdInfo').attr('class', 'label label-info').text('{{ lang._('checking...') }}');
-        ajaxCall('/api/activestandby/pairing/updatescheck', {}, function () { setTimeout(refreshUpdates, 12000); setTimeout(refreshUpdates, 30000); });
+        ajaxGet('/api/activestandby/pairing/updates', {}, function (u0) {
+            lastCheckSeen = (u0 && u0.last_check) || '';
+            ajaxCall('/api/activestandby/pairing/updatescheck', {}, function () {
+                let tries = 0;
+                const t = setInterval(function () {
+                    ajaxGet('/api/activestandby/pairing/updates', {}, function (u) {
+                        if ((u && u.last_check && u.last_check !== lastCheckSeen) || ++tries > 20) { clearInterval(t); btn.prop('disabled', false); refreshUpdates(); }
+                    });
+                }, 3000);
+            });
+        });
     });
     refreshUpdates();
 
@@ -144,10 +171,12 @@ $(function () {
             });
         });
     });
-    $('#opUpCancel').click(function () { ajaxCall('/api/activestandby/pairing/upgradecancel', {}, function () { refreshJob(); }); });
+    $('#opUpCancel').click(function () {
+        stdDialogConfirm('{{ lang._('Cancel the upgrade?') }}', '{{ lang._('The job stops where it is. A firewall that is being updated or rebooted finishes that step. Maintenance mode stays on until you switch it off.') }}', '{{ lang._('Cancel upgrade') }}', '{{ lang._('Keep running') }}', function () { ajaxCall('/api/activestandby/pairing/upgradecancel', {}, function () { refreshJob(); }); });
+    });
 
     refreshMaint(); refreshHistory(); refreshJob();
-    setInterval(function () { refreshMaint(); refreshJob(); }, 5000);
+    setInterval(function () { if (!document.hidden) { refreshMaint(); refreshJob(); } }, 8000);
     setInterval(refreshHistory, 20000);
 });
 </script>

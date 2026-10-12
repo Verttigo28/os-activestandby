@@ -1,108 +1,123 @@
 <form>
     <field>
+        <type>header</type>
+        <label>This firewall (these three settings are specific to each firewall; everything below is shared and copied from the active firewall)</label>
+    </field>
+    <field>
         <id>activestandby.general.enabled</id>
-        <label>Enable</label>
+        <label>Enable HA on this firewall</label>
         <type>checkbox</type>
-        <help>Run the HA daemon on this node.</help>
+        <help>Runs the HA service. Turning it off stops heartbeat, replication and automatic failover on this firewall.</help>
     </field>
     <field>
         <id>activestandby.general.ha_interface</id>
-        <label>HA link interface</label>
+        <label>HA link interface (this firewall)</label>
         <type>dropdown</type>
-        <help>Dedicated point-to-point interface to the peer. It needs a different static IP on each node and is never put in standby.</help>
+        <help>The dedicated cable to the other firewall. It needs a different static IPv4 address on each firewall and is never put in standby.</help>
     </field>
     <field>
         <id>activestandby.general.mgmt_interface</id>
-        <label>Management interface (optional)</label>
+        <label>Management interface (this firewall, optional)</label>
         <type>dropdown</type>
-        <help>Stays up on the standby and is used as a secondary heartbeat path. It is also excluded from MAC sharing and config sync.</help>
+        <help>Stays up on the standby, so you can reach its GUI. It also carries a second heartbeat path. It is excluded from MAC sharing and configuration sync.</help>
+    </field>
+    <field>
+        <id>activestandby.general.listen_port</id>
+        <label>Peer port (this firewall)</label>
+        <type>text</type>
+        <advanced>true</advanced>
+        <help>TCP port of the secure link between the firewalls, bound to the HA and management address only. Use the same value on both firewalls: it is not copied between them. The firewall rules created by the wizard assume 7690-7691.</help>
+    </field>
+
+    <field>
+        <type>header</type>
+        <label>Failover</label>
     </field>
     <field>
         <id>activestandby.general.auto_failover</id>
         <label>Automatic failover</label>
         <type>checkbox</type>
-        <help>The standby promotes itself when the active node is lost on all heartbeat paths, and a rebooted node waits in standby. Disable to fail over manually only.</help>
+        <help>The standby takes over by itself when the active firewall is lost. Turn off to switch roles by hand only (a rebooted firewall always waits as standby).</help>
+    </field>
+    <field>
+        <id>activestandby.general.detect_time</id>
+        <label>Peer failure detection time (seconds)</label>
+        <type>text</type>
+        <help>How long the other firewall must be silent on every heartbeat path before it counts as dead. 1-2 s gives the fastest failover; use 3-5 s on a loaded firewall or a link that is not a dedicated cable, or you risk needless switches.</help>
     </field>
     <field>
         <id>activestandby.general.preempt</id>
         <label>Primary takes over again (preemption)</label>
         <type>checkbox</type>
-        <help>When the primary node is back as standby and the peer has been active and healthy for the delay below, hand the active role back to the primary.</help>
+        <help>When the primary firewall is back as standby and the other one has been active and healthy for the delay below, the active role goes back to the primary (a short interruption). Leave off if you prefer to choose the moment yourself.</help>
     </field>
     <field>
         <id>activestandby.general.preempt_delay</id>
         <label>Preemption delay (seconds)</label>
         <type>text</type>
         <advanced>true</advanced>
+        <help>How long the other firewall must have been active and healthy before the role is handed back. Only used when preemption is on.</help>
+    </field>
+    <field>
+        <id>activestandby.general.allow_ha_only_promote</id>
+        <label>Take over when only the HA link says the peer is gone (split-brain risk)</label>
+        <type>checkbox</type>
+        <advanced>true</advanced>
+        <help>Without a management interface, the standby normally refuses to take over when it cannot prove that its own HA cable is healthy. Turning this on makes it take over anyway: if only the cable is cut, both firewalls become active. Prefer adding a management interface.</help>
+    </field>
+
+    <field>
+        <type>header</type>
+        <label>Health of the active firewall</label>
     </field>
     <field>
         <id>activestandby.general.monitor_interfaces</id>
         <label>Monitored interfaces</label>
-        <type>text</type>
-        <help>Comma separated interface keys (e.g. wan). If one loses carrier on the active node while the standby still sees link on the same port, the roles are switched.</help>
+        <type>select_multiple</type>
+        <help>If one of these loses its link on the active firewall while the standby still sees link on the same port, the roles are switched (after the hold time below).</help>
     </field>
     <field>
         <id>activestandby.general.health_services</id>
         <label>Monitor critical services</label>
         <type>checkbox</type>
-        <help>Restart the packet filter and IPsec if they die on the active node; switch roles if that does not help.</help>
+        <help>Restarts the packet filter and IPsec if they die on the active firewall; switches roles if that does not help.</help>
     </field>
     <field>
         <id>activestandby.general.probe_targets</id>
-        <label>Probe targets</label>
+        <label>Probe targets (upstream)</label>
         <type>text</type>
-        <help>Optional. IPv4 addresses (for example the upstream router) that the active node pings every 2 seconds. If none answers for the failure hold time and the standby has link on the same ports, roles are switched. Use addresses that only THIS node's uplink can lose; an outage upstream of both nodes cannot be fixed by switching.</help>
+        <help>Optional. Up to five IPv4 addresses, comma separated, for example the upstream router. The active firewall pings them every 2 seconds. If none answers for the hold time below and the standby has link on the same ports, the roles are switched. Use addresses that only THIS firewall's uplink can lose: an outage that affects both firewalls cannot be fixed by switching. Switching is suspended for 30 s after every takeover, at most two health switches happen in 30 minutes, and there is a 5 minute cool-down.</help>
+    </field>
+    <field>
+        <id>activestandby.general.mgmt_probe_targets</id>
+        <label>Management probe targets</label>
+        <type>text</type>
+        <help>Optional. Up to five IPv4 addresses on the management network (the management switch or router). BOTH firewalls ping them from their management address every 2 seconds. A standby that cannot reach them will not take over (it may be the isolated one), and an active firewall will not hand over for a health problem when the standby cannot reach them either. Needs a management interface; use addresses that answer ping.</help>
+    </field>
+    <field>
+        <id>activestandby.general.health_hold</id>
+        <label>Local health-failure hold time (seconds)</label>
+        <type>text</type>
+        <advanced>true</advanced>
+        <help>How long a health problem (link, service, probe) must persist on the active firewall before the roles are switched.</help>
+    </field>
+
+    <field>
+        <type>header</type>
+        <label>Replication</label>
+    </field>
+    <field>
+        <id>activestandby.general.sync_sessions</id>
+        <label>Keep GUI logins across a failover</label>
+        <type>checkbox</type>
+        <help>Copies the web GUI sessions of the active firewall to the standby so you stay logged in after a failover. They only travel over the pinned HA connection and are removed on the standby when you log out. Turn off if session data must not leave the active firewall.</help>
     </field>
     <field>
         <id>activestandby.general.virtual_mac</id>
         <label>Use a virtual MAC address</label>
         <type>checkbox</type>
         <advanced>true</advanced>
-        <help>Shared interfaces get a generated MAC address (02:...) instead of the primary's hardware address, so replacing a node never changes what the network sees. Applies to interfaces when they are first shared (pairing or kit). Existing pinned addresses stay as they are.</help>
-    </field>
-    <field>
-        <id>activestandby.general.sync_sessions</id>
-        <label>Keep GUI logins across a failover</label>
-        <type>checkbox</type>
-        <help>Copies the web GUI sessions of the active node to the standby, so you stay logged in after a failover. Sessions are only sent over the pinned HA connection and removed on the standby when you log out. Turn off if you do not want session data to leave the active node.</help>
-    </field>
-    <field>
-        <id>activestandby.general.mgmt_probe_targets</id>
-        <label>Management probe targets</label>
-        <type>text</type>
-        <help>Optional. IPv4 addresses on the management network (the management switch or router) that BOTH nodes ping from their management address every 2 seconds. A standby that cannot reach them will not take over (it may be the isolated one), and an active node will not hand over because of a health problem when the standby cannot reach them either. Needs a management interface. Use addresses that answer ping.</help>
-    </field>
-    <field>
-        <id>activestandby.general.detect_time</id>
-        <label>Failure detection time (seconds)</label>
-        <type>text</type>
-        <help>How long the other node must be silent on every heartbeat path before it counts as dead. Lower means faster automatic failover (1-2 s) but more risk of a needless switch on a loaded or flaky link. Same value on both nodes.</help>
-    </field>
-    <field>
-        <id>activestandby.general.health_hold</id>
-        <label>Failure hold time (seconds)</label>
-        <type>text</type>
-        <advanced>true</advanced>
-        <help>How long a health problem must persist on the active node before roles are switched.</help>
-    </field>
-    <field>
-        <id>activestandby.general.fence_command</id>
-        <label>Fencing command</label>
-        <type>text</type>
-        <advanced>true</advanced>
-        <help>Absolute path of an executable (owned by root, not writable by others) that is run before an automatic promotion, for example to power off the peer through IPMI or a smart PDU. A non-zero exit status or a timeout (30 s) cancels the promotion. Arguments: promote, peer address.</help>
-    </field>
-    <field>
-        <id>activestandby.general.notify_level</id>
-        <label>Notification level</label>
-        <type>dropdown</type>
-        <help>Which events are sent to the webhook. Every event is written to syslog (tag hasyncd). For e-mail, add the "ha_status" check from the documentation to Monit.</help>
-    </field>
-    <field>
-        <id>activestandby.general.notify_webhook</id>
-        <label>Webhook URL</label>
-        <type>text</type>
-        <help>Receives a JSON POST ({time, kind, node, message}) for every event at or above the level.</help>
+        <help>Shared interfaces get a generated MAC address (02:...) instead of the primary's hardware address, so replacing a firewall never changes what the network sees. Applies to interfaces when they are first shared (pairing or kit); addresses already pinned stay as they are.</help>
     </field>
     <field>
         <id>activestandby.general.force_promisc</id>
@@ -111,18 +126,33 @@
         <advanced>true</advanced>
         <help>Needed on virtual NICs (Hyper-V, some virtio setups) whose driver does not reprogram its receive filter when the shared MAC is applied. Real NICs (Intel ixl, igb, ...) do not need it.</help>
     </field>
+
     <field>
-        <id>activestandby.general.allow_ha_only_promote</id>
-        <label>Promote on HA-link-only silence</label>
-        <type>checkbox</type>
-        <advanced>true</advanced>
-        <help>Without a management heartbeat path, promote even if this node cannot prove its own HA link is healthy. Risk: both nodes active if only the cable is cut.</help>
+        <type>header</type>
+        <label>Safety</label>
     </field>
     <field>
-        <id>activestandby.general.listen_port</id>
-        <label>Peer port</label>
+        <id>activestandby.general.fence_command</id>
+        <label>Fencing command</label>
         <type>text</type>
         <advanced>true</advanced>
-        <help>TCP port of the peer link (mutual TLS), bound to the HA link address only. Must be the same on both nodes.</help>
+        <help>Absolute path of an executable (owned by root, not writable by others, in directories not writable by others), run before an automatic takeover, for example to power off the peer through IPMI or a smart PDU. Arguments: promote, peer address. A non-zero exit status or a timeout (30 s) CANCELS the takeover, so test it as root first: a failing command disables automatic failover.</help>
+    </field>
+
+    <field>
+        <type>header</type>
+        <label>Notifications</label>
+    </field>
+    <field>
+        <id>activestandby.general.notify_level</id>
+        <label>Notification level</label>
+        <type>dropdown</type>
+        <help>Which events are sent to the webhook. Every event is written to syslog (tag hasyncd). For e-mail, add the HA check to Monit (see the documentation).</help>
+    </field>
+    <field>
+        <id>activestandby.general.notify_webhook</id>
+        <label>Webhook URL</label>
+        <type>text</type>
+        <help>Receives a JSON POST ({time, kind, node, role, state, message}) for every event at or above the level. Loopback and link-local addresses are refused.</help>
     </field>
 </form>

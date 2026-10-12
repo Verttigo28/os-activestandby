@@ -41,7 +41,7 @@ foreach ($cfg->interfaces->children() as $key => $node) {
     $mac = $details[$dev]['macaddr'] ?? '';
     if (
         !preg_match('/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i', $mac) || $mac === '00:00:00:00:00:00' ||
-        (hexdec(substr($mac, 0, 2)) & 1) || preg_match('/^(lo|enc|pflog|pfsync|tun|wg|ovpn)\d*$/', $dev)
+        (hexdec(substr($mac, 0, 2)) & 1) || preg_match('/^(lo|enc|pflog|pfsync|tun|wg|ovpn[sc]?)\d*$/', $dev)
     ) {
         continue; // not an ethernet-like device (loopback, tunnel, multicast/zero address, ...)
     }

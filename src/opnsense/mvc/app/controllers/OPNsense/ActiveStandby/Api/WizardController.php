@@ -11,7 +11,7 @@ use OPNsense\Core\Config;
  */
 class WizardController extends ApiControllerBase
 {
-    private const VIRTUAL = '/^(lo|enc|pflog|pfsync|tun|tap|wg|ovpn|ipsec|gif|gre)\d*$/';
+    private const VIRTUAL = '/^(lo|enc|pflog|pfsync|tun|tap|wg|ovpn[sc]?|ipsec|gif|gre)\d*$/';
 
     public function interfacesAction()
     {
@@ -76,6 +76,9 @@ class WizardController extends ApiControllerBase
             if ((string)$cfg->interfaces->$ha->enable === '') {
                 $errors[] = gettext('The HA link interface is not enabled.');
             }
+        }
+        if ($mgmt === '') {
+            $warnings[] = gettext('No management interface selected. Over a direct HA cable the standby cannot tell "the other firewall lost power" from "my own cable is unplugged": it will NOT take over by itself after a power loss unless you allow that under Settings > Safety (risk: both firewalls active if only the cable is cut). A management interface, ideally with management probe targets, solves this.');
         }
         if ($mgmt !== '' && $mgmt === $ha) {
             $errors[] = gettext('Management and HA link must be different interfaces.');

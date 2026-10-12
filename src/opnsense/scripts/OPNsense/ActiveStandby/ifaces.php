@@ -11,7 +11,7 @@
  * (both read from OPNsense/ActiveStandby/general in the same file) and except virtual/loopback devices.
  */
 
-const NOT_DATA = '/^(lo|enc|pflog|pfsync|tun|tap|wg|ovpn|ipsec|gif|gre)\d*$/';
+const NOT_DATA = '/^(lo|enc|pflog|pfsync|tun|tap|wg|ovpn[sc]?|ipsec|gif|gre)\d*$/';
 
 function load(string $path): SimpleXMLElement
 {
@@ -86,7 +86,20 @@ if ($cmd === 'list') {
             $skipDevs[] = (string)$node->if;
         }
     }
-    // never force the HA/mgmt devices down, even if they are a VLAN parent of a data interface
+    // never force the HA/mgmt devices down, nor the NIC (parent) or LAGG members they are built on: an HA or management
+    // VLAN that shares its trunk with data VLANs would otherwise be cut together with them
+    foreach ($cfg->vlans->vlan ?? [] as $v) {
+        if (in_array((string)$v->vlanif, $skipDevs, true)) {
+            $skipDevs[] = (string)$v->if;
+        }
+    }
+    foreach ($cfg->laggs->lagg ?? [] as $l) {
+        if (in_array((string)$l->laggif, $skipDevs, true)) {
+            foreach (explode(',', (string)$l->members) as $m) {
+                $skipDevs[] = trim($m);
+            }
+        }
+    }
     $down = array_values(array_diff(array_unique(array_filter($down)), $skipDevs));
     // virtual device types present in the config; promote must (re)create them before bringing interfaces up
     $types = [];
@@ -98,7 +111,9 @@ if ($cmd === 'list') {
             $types[] = $t;
         }
     }
-    echo json_encode(['data' => $data, 'force_down' => $down, 'keep_up' => $skipDevs, 'device_types' => $types]), "\n";
+    $g = $cfg->OPNsense->ActiveStandby->general ?? null;
+    echo json_encode(['data' => $data, 'force_down' => $down, 'keep_up' => array_values(array_unique($skipDevs)), 'device_types' => $types,
+        'ha_key' => $g === null ? '' : (string)$g->ha_interface, 'mgmt_key' => $g === null ? '' : (string)$g->mgmt_interface]), "\n";
 } elseif ($cmd === 'stdview') {
     $cfg = load($argv[2] ?? '');
     $skip = skipKeys($cfg);

@@ -214,7 +214,7 @@ func (d *Daemon) peerCall(path string, timeout time.Duration) (map[string]any, e
 	}
 	cl := d.peerClient(st.PeerFP, nil)
 	cl.Timeout = timeout
-	resp, err := cl.Post("https://"+net.JoinHostPort(st.PeerAddr, fmt.Sprint(st.PeerPort))+path, "application/json", nil)
+	resp, err := cl.Post("https://"+net.JoinHostPort(d.peerEndpoint(st), fmt.Sprint(st.PeerPort))+path, "application/json", nil)
 	if err != nil {
 		return nil, err
 	}

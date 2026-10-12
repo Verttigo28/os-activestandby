@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // flushDev removes every address from the device and sets it down.
@@ -27,8 +28,8 @@ func flushDev(dev string) {
 }
 
 var (
-	virtualDev = regexp.MustCompile(`^(vlan|lagg|bridge|gre|gif|epair|vxlan|qinq|tap|tun|ovpn|wg)[0-9]`)
-	asyncDev   = regexp.MustCompile(`^(pppoe|pptp|l2tp|ppp)[0-9]`) // created by mpd5 once the session is up
+	virtualDev = regexp.MustCompile(`^(vlan|lagg|bridge|gre|gif|epair|vxlan|qinq|tap|tun|ovpn[sc]?|wg)[0-9]`)
+	asyncDev   = regexp.MustCompile(`^(pppoe|pptp|l2tp|ppp|ovpn[sc])[0-9]`) // created by mpd5 once the session is up
 	devSection = regexp.MustCompile(`(?s)<(vlans|laggs|bridges|gres|gifs|qinqs)>.*?</(vlans|laggs|bridges|gres|gifs|qinqs)>`)
 )
 
@@ -98,4 +99,19 @@ func (d *Daemon) prepareDevices() {
 	d.enforceOnce()
 	d.ops.devHash = h
 	log.Printf("standby: virtual devices prepared for a fast takeover")
+}
+
+// waitCarrier gives physical NICs time to negotiate: "UP" is only the administrative flag, the link of a real NIC (ixl,
+// igb, ...) needs one to a few seconds. Announcing the MAC before that is lost on the switch, and starting gateway
+// monitoring before that makes a healthy gateway look dead. Devices that never report a carrier are not waited for.
+func waitCarrier(devs []Iface, max time.Duration) {
+	deadline := time.Now().Add(max)
+	for _, i := range devs {
+		if asyncDev.MatchString(i.Dev) || strings.HasPrefix(i.Dev, "bridge") || strings.HasPrefix(i.Dev, "gif") || strings.HasPrefix(i.Dev, "gre") {
+			continue
+		}
+		for !carrierUp(i.Dev) && time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
 }

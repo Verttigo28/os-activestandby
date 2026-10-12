@@ -24,7 +24,7 @@
 - Webhook delivery does not follow redirects.
 
 **GUI**
-- Two privileges: *Active/Standby HA (full control)* and *Active/Standby HA (read-only status and metrics)*. Give Prometheus scrapers and dashboard users the read-only one. The secondary kit download, settings, failover and every other action need full control.
+- Three privileges (System > Access > Groups or Users): *System: Active/Standby HA (administrator: settings, setup, kit download, break pair)*, *(operator: status, failover, maintenance, upgrade, pre-flight)* and *(read-only status and metrics)*. Give Prometheus scrapers and dashboard users the read-only one, on-call staff the operator one. The administrator privilege also reaches the kit download (a full configuration copy), so treat it as equivalent to an OPNsense administrator.
 - Every manual action (failover, promote, demote, break, maintenance, kit, upgrade, settings, service reconfigure) is written to the HA event log and syslog with user and source address.
 - Output is escaped in the views; the standby shows a banner on every page.
 

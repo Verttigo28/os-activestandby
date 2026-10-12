@@ -60,6 +60,8 @@ type IfaceSet struct {
 	ForceDown   []string `json:"force_down"`
 	KeepUp      []string `json:"keep_up"`
 	DeviceTypes []string `json:"device_types"`
+	HAKey       string   `json:"ha_key"`
+	MgmtKey     string   `json:"mgmt_key"`
 }
 
 type Ops struct {
@@ -135,7 +137,9 @@ func (d *Daemon) writeStandbyView(full string) error {
 
 // activeValid reports whether active.xml looks like a complete OPNsense config (not empty/torn).
 func activeValid(dir string) bool {
-	b, err := os.ReadFile(activeXML(dir))
-	return err == nil && len(b) > 200 && strings.Contains(string(b[:min(len(b), 4096)]), "<opnsense") &&
-		strings.Contains(string(b[max(0, len(b)-64):]), "</opnsense>")
+	return cachedValid(activeXML(dir), func() bool {
+		b, err := os.ReadFile(activeXML(dir))
+		return err == nil && len(b) > 200 && strings.Contains(string(b[:min(len(b), 4096)]), "<opnsense") &&
+			strings.Contains(string(b[max(0, len(b)-64):]), "</opnsense>")
+	})
 }

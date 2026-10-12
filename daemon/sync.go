@@ -307,7 +307,7 @@ func (d *Daemon) pinMACs() bool {
 	return false
 }
 
-var pinnedKey = regexp.MustCompile(`(w+)([^)]*)=`)
+var pinnedKey = regexp.MustCompile(`(\w+)\([^)]*\)=`)
 
 // applyPinned makes a freshly written virtual MAC take effect on this (running, active) node: the interface is
 // reconfigured (about a second of interruption on it) and the network is told with a gratuitous ARP.

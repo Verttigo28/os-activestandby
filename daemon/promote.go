@@ -134,6 +134,8 @@ func (d *Daemon) promote(reason string) (retErr error) {
 			return fmt.Errorf("interface %s (%s) did not come up after reconfigure; is it enabled in the config?", i.Key, i.Dev)
 		}
 	}
+	waitCarrier(enabled, 8*time.Second)
+	step(t0, "links up")
 	// gratuitous ARP first, right after the links are up so the switch and neighbours relearn the port
 	for _, i := range enabled {
 		announce(i.Dev)
@@ -163,6 +165,7 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		t1 := time.Now()
 		out, err := sh(reconfScript, "dns")
 		log.Printf("  dhcp+dns restart: %dms err=%v out=%q", time.Since(t1).Milliseconds(), err, out)
+		restartBoundServices()
 	}()
 	step(t0, "pf reloaded, services started")
 	d.event("change", "promoted to ACTIVE (%s) in %d ms", reason, time.Since(t0).Milliseconds())
@@ -181,4 +184,26 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	d.health.startGrace()
 	step(t0, "ACTIVE")
 	return err
+}
+
+// boundServices are services that bind to interface addresses and do not notice that the addresses came back. When one
+// of them is installed and enabled (it shows up as a service), it is restarted after a takeover. A missing action is
+// harmless: the result is ignored.
+var boundServices = map[string][]string{
+	"ntpd":          {"configctl", "ntpd", "restart"},
+	"captiveportal": {"configctl", "captiveportal", "restart"},
+	"suricata":      {"configctl", "ids", "restart"},
+	"haproxy":       {"configctl", "haproxy", "restart"},
+	"ddclient":      {"configctl", "ddclient", "restart"},
+}
+
+func restartBoundServices() {
+	svc, _ := sh("pluginctl", "-S")
+	for name, cmd := range boundServices {
+		if strings.Contains(svc, `"name": "`+name+`"`) {
+			if out, err := sh(cmd[0], cmd[1:]...); err != nil {
+				log.Printf("  restart %s after takeover: %v: %s", name, err, out)
+			}
+		}
+	}
 }

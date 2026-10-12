@@ -14,7 +14,7 @@
   "preempt_delay": {{ g.preempt_delay|default("300")|int }},
   "monitor_interfaces": {{ g.monitor_interfaces|default("")|tojson }},
   "health_services": {{ "true" if g.health_services|default("0") == "1" else "false" }},
-  "detect_time": {{ g.detect_time|default("2")|int }},
+  "detect_time": {{ g.detect_time|default("3")|int }},
   "mgmt_probe_targets": {{ g.mgmt_probe_targets|default("")|tojson }},
   "sync_sessions": {{ "true" if g.sync_sessions|default("1") == "1" else "false" }},
   "probe_targets": {{ g.probe_targets|default("")|tojson }},

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -40,6 +41,11 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) error {
 	set, err := d.ops.ifaces(activeXML(d.store.dir))
 	if err != nil {
 		return err
+	}
+	if d.cfg.HADevice != "" && set.HAKey == "" {
+		// a restored backup without this plugin's settings: the HA link and management would be cut together with the data
+		// interfaces. Refuse; the node stays as it is until the settings are back.
+		return errors.New("the saved configuration has no HA settings (was a backup restored without them?): refusing to stand down, which would cut the HA link; restore the Active/Standby settings first")
 	}
 	// interfaces first (traffic stops immediately), then rewrite the config so nothing re-enables them
 	var fw sync.WaitGroup

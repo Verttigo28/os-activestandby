@@ -1,7 +1,7 @@
 <div id="wizard" class="tab-pane fade in">
     <div class="col-md-12">
         <h2>{{ lang._('Setup wizard') }}</h2>
-        <p>{{ lang._('Run this on both nodes. First the interfaces, then the role of this node, then pair the two nodes over the HA link.') }}</p>
+        <p>{{ lang._('Set up a pair of firewalls. Run the wizard on the firewall that holds your production configuration (the primary): it can build the second firewall for you. Only if the second firewall is already installed and running, run the wizard there too and choose Secondary.') }}</p>
 
         <div class="wz-step" id="wz1">
             <h3>1. {{ lang._('Interfaces') }}</h3>
@@ -22,12 +22,12 @@
 
         <div class="wz-step" id="wz2" style="display:none">
             <h3>2. {{ lang._('Role of this node') }}</h3>
-            <div class="radio"><label><input type="radio" name="wzRole" value="primary" checked/>
+            <div class="radio"><label><input type="radio" name="wzRole" value="primary"/>
                 <b>{{ lang._('Primary') }}</b> &mdash; {{ lang._('this node keeps its configuration and is active first.') }}</label></div>
             <div class="radio"><label><input type="radio" name="wzRole" value="secondary"/>
-                <b>{{ lang._('Secondary') }}</b> &mdash; {{ lang._('this node starts as standby. Its configuration (except hostname, HA and management interface and these settings) is REPLACED by the primary.') }}</label></div>
+                <b>{{ lang._('Secondary') }}</b> &mdash; {{ lang._('this node starts as standby. Its configuration (except hostname and the HA and management interface) is REPLACED by the primary and cannot be recovered.') }}</label></div>
             <button class="btn btn-default" id="wzBack2">{{ lang._('Back') }}</button>
-            <button class="btn btn-primary" id="wzNext2">{{ lang._('Continue') }}</button>
+            <button class="btn btn-primary" id="wzNext2" disabled>{{ lang._('Continue') }}</button>
         </div>
 
         <div class="wz-step" id="wz3p" style="display:none">
@@ -66,7 +66,9 @@
 
         <div class="wz-step" id="wz3s" style="display:none">
             <h3>3. {{ lang._('Wait for the primary') }}</h3>
+            <p>{{ lang._('Open the pairing window here, then run the wizard on the PRIMARY and enter the address and the token shown below. The window stays open for 10 minutes. Everything on this firewall except its hostname and the HA and management interface will be replaced by the configuration of the primary.') }}</p>
             <button class="btn btn-primary" id="wzPrepare">{{ lang._('Open pairing window') }}</button>
+            <button class="btn btn-default" id="wzPrepCancel" style="display:none">{{ lang._('Close the pairing window') }}</button>
             <div id="wzPrepRes" class="alert" style="display:none; margin-top:10px"></div>
             <button class="btn btn-default wzBackRole" style="margin-top:10px">{{ lang._('Back') }}</button>
         </div>
@@ -106,7 +108,16 @@ $(function () {
         });
     }
     $('#wzCheckBtn').click(() => check());
-    $('#wzHa, #wzMgmt').change(() => $('#wzNext1').prop('disabled', true));
+    $('#wzHa, #wzMgmt').change(function () { $('#wzNext1').prop('disabled', true); if ($('#wzHa').val()) { check(); } }); // checked as soon as the choice changes
+    // start from what is saved, so a reload in the middle of the wizard does not lose the choice
+    ajaxGet('/api/activestandby/settings/get', {}, function (r) {
+        const g = (r.activestandby || {}).general || {};
+        const sel = o => { for (const k in (o || {})) { if (o[k] && o[k].selected) { return k; } } return ''; };
+        const ha = sel(g.ha_interface), mg = sel(g.mgmt_interface);
+        if (ha) { $('#wzHa').val(ha); }
+        if (mg) { $('#wzMgmt').val(mg); }
+        if (ha) { check(); }
+    });
 
     $('#wzNext1').click(function () {
         const ha = $('#wzHa').val(), mgmt = $('#wzMgmt').val();
@@ -129,6 +140,7 @@ $(function () {
             };
             ajaxCall('/api/activestandby/settings/set', {activestandby: {general: {enabled: '1', ha_interface: ha, mgmt_interface: mgmt}}}, function (r) {
                 if (r.result !== 'saved') { alertBox('#wzApply', 'alert-danger', esc(JSON.stringify(r.validations || r))); return; }
+                if (window.asReloadSettings) { window.asReloadSettings(); }
                 if ($('#wzRule').is(':checked') && !pre.has_ha_rule) {
                     // only what the HA link needs, from the HA segment to this firewall: the peer API and update proxy (TCP 7690-7691),
                     // ping, and pfsync. Not "any": the GUI, SSH and DNS stay closed on this interface.
@@ -147,7 +159,12 @@ $(function () {
 
     $('#wzBack2').click(() => step('wz1'));
     $('.wzBackRole').click(() => step('wz2'));
-    $('#wzNext2').click(() => step($('input[name=wzRole]:checked').val() === 'primary' ? 'wz3p' : 'wz3s'));
+    $('input[name=wzRole]').change(function () { $('#wzNext2').prop('disabled', false); });
+    $('#wzNext2').click(function () {
+        const primary = $('input[name=wzRole]:checked').val() === 'primary';
+        if (primary) { step('wz3p'); return; }
+        stdDialogConfirm('{{ lang._('Make this firewall the secondary?') }}', '{{ lang._('The configuration of this firewall (except hostname and the HA and management interface) will be REPLACED by the primary and cannot be recovered. Only continue on the firewall that should become the standby.') }}', '{{ lang._('Continue as secondary') }}', '{{ lang._('Cancel') }}', function () { step('wz3s'); });
+    });
 
     function paired(msg) {
         $('#wzDone').text(msg);
@@ -173,23 +190,31 @@ $(function () {
         }, 3000);
     }
     $('#kitDownload').click(function () {
-        alertBox('#kitRes', 'alert-info', '{{ lang._('Building...') }}');
-        ajaxCall('/api/activestandby/pairing/kit', {ha: $('#kitHa').val(), mgmt: $('#kitMgmt').val(), hostname: $('#kitHost').val()}, function (r) {
-            if (r.error || !r.xml) { alertBox('#kitRes', 'alert-danger', esc(r.error || 'no data')); return; }
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(new Blob([r.xml], {type: 'text/xml'}));
-            a.download = r.filename;
-            document.body.appendChild(a); a.click(); a.remove();
-            alertBox('#kitRes', 'alert-success', '{{ lang._('Downloaded') }} <b>' + esc(r.filename) + '</b>. {{ lang._('It contains secrets (users, keys, the pairing key): keep it safe and delete it afterwards. It is valid for 48 hours.') }}');
-            watchKit();
+        const btn = $(this);
+        stdDialogConfirm('{{ lang._('Download the configuration of the second firewall?') }}', '{{ lang._('The file is a complete copy of the configuration of this firewall, including users, password hashes, keys and a pairing key. Anyone who gets it can impersonate this firewall. Keep it safe and delete it after use. Creating a new file invalidates the previous one.') }}', '{{ lang._('Download') }}', '{{ lang._('Cancel') }}', function () {
+            btn.prop('disabled', true);
+            alertBox('#kitRes', 'alert-info', '{{ lang._('Building...') }}');
+            ajaxCall('/api/activestandby/pairing/kit', {ha: $('#kitHa').val(), mgmt: $('#kitMgmt').val(), hostname: $('#kitHost').val()}, function (r) {
+                btn.prop('disabled', false);
+                if (!r || r.error || !r.xml) { alertBox('#kitRes', 'alert-danger', esc((r && r.error) || '{{ lang._('No answer from the firewall.') }}')); return; }
+                const url = URL.createObjectURL(new Blob([r.xml], {type: 'text/xml'}));
+                const a = document.createElement('a');
+                a.href = url; a.download = r.filename;
+                document.body.appendChild(a); a.click(); a.remove();
+                alertBox('#kitRes', 'alert-success', '{{ lang._('Downloaded') }} <b>' + esc(r.filename) + '</b>. {{ lang._('It contains secrets: keep it safe and delete it afterwards. It is valid for 48 hours.') }} <a href="' + url + '" download="' + esc(r.filename) + '">{{ lang._('Download again') }}</a>');
+                watchKit();
+            });
         });
     });
     $('#kitCancel').click(function () { ajaxCall('/api/activestandby/pairing/kitcancel', {}, function () {}); });
     ajaxGet('/api/activestandby/pairing/status', {}, function (s) { if (s.kit) { watchKit(); } });
 
     $('#wzPair').click(function () {
+        const btn = $(this).prop('disabled', true);
         alertBox('#wzPairRes', 'alert-info', '{{ lang._('Pairing...') }}');
         ajaxCall('/api/activestandby/pairing/pair', {peer: $('#wzPeer').val(), token: $('#wzToken').val()}, function (r) {
+            btn.prop('disabled', false);
+            if (!r || !r.status && !r.error) { alertBox('#wzPairRes', 'alert-danger', '{{ lang._('No answer from the firewall.') }}'); return; }
             if (r.error) {
                 let h = esc(r.error);
                 if (r.diffs && r.diffs.length) { h += '<ul>' + r.diffs.map(d => '<li>' + esc(d) + '</li>').join('') + '</ul>'; }
@@ -204,15 +229,26 @@ $(function () {
     $('#wzPrepare').click(function () {
         ajaxCall('/api/activestandby/pairing/prepare', {}, function (r) {
             if (r.error) { alertBox('#wzPrepRes', 'alert-danger', esc(r.error)); return; }
-            alertBox('#wzPrepRes', 'alert-info', '{{ lang._('On the primary enter address') }} <b>' + esc(r.address) + '</b> {{ lang._('and token') }} <b style="font-size:150%">' + esc(r.token) + '</b><br><small>{{ lang._('Valid until') }} ' + esc(r.expires) + '</small>');
+            const until = Date.parse(r.expires);
+            const show = function () {
+                const left = Math.max(0, Math.round((until - Date.now()) / 1000));
+                alertBox('#wzPrepRes', left > 0 ? 'alert-info' : 'alert-warning', left > 0
+                    ? '{{ lang._('On the primary enter address') }} <b>' + esc(r.address) + '</b> {{ lang._('and token') }} <b style="font-size:150%; font-family:monospace">' + esc(r.token) + '</b><br><small>{{ lang._('Time left') }}: ' + Math.floor(left / 60) + ':' + ('0' + (left % 60)).slice(-2) + '</small>'
+                    : '{{ lang._('The pairing window has closed. Open it again.') }}');
+                $('#wzPrepCancel').toggle(left > 0);
+                return left;
+            };
+            show();
             clearInterval(pollPrep);
             pollPrep = setInterval(function () {
+                if (show() === 0) { clearInterval(pollPrep); return; }
                 ajaxGet('/api/activestandby/pairing/status', {}, function (s) {
-                    if (s.role === 'standby') { clearInterval(pollPrep); paired('{{ lang._('Paired. This node is the secondary (standby). Its configuration will be replaced by the primary.') }}'); }
+                    if (s.role === 'standby') { clearInterval(pollPrep); $('#wzPrepCancel').hide(); paired('{{ lang._('Paired. This node is the secondary (standby). Its configuration will be replaced by the primary.') }}'); }
                 });
             }, 2000);
         });
     });
+    $('#wzPrepCancel').click(function () { clearInterval(pollPrep); ajaxCall('/api/activestandby/pairing/cancel', {}, function () { $('#wzPrepRes').hide(); $('#wzPrepCancel').hide(); }); });
     $('#wzToStatus').click(function () { $('#maintabs a[href="#status"]').tab('show'); location.reload(); });
 });
 </script>

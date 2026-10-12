@@ -12,7 +12,7 @@
 | Event | Behaviour |
 |---|---|
 | Planned failover (button, health switch, preemption, upgrade) | about 0.7 s of lost traffic in the lab, 1.3-1.9 s for the whole operation |
-| Active node loses power or crashes | the standby promotes after the detection time (default 2 s, 1-30) of silence on **all** heartbeat paths, plus about 0.5 s: about 1.5 s with a 1 s detection time |
+| Active node loses power or crashes | the standby promotes after the detection time (default 3 s, 1-30) of silence on **all** heartbeat paths, plus about 0.5 s: about 1.5 s with a 1 s detection time |
 | Standby cannot prove it is not the isolated node (its management/HA carrier is down) | **no** automatic promotion; event "held back"; promote manually if the peer is really down |
 | Both nodes up, nobody active (cold start) | the primary promotes about 5 s after the daemons start, the secondary only after about 30 s |
 | A node reboots | always boots as standby, then follows the rules above; failback is manual unless *preemption* is on |
@@ -24,7 +24,7 @@ Real NICs add link-up time (typically 1-3 s for copper) that the lab cannot show
 
 ## Maintenance mode
 
-**Operations > Maintenance mode** pauses automatic failover, preemption and health-driven switching on both nodes for up to 24 h (default 4 h, it switches itself off). Split-brain protection stays on. Use it for planned work.
+**Operations > Maintenance mode** pauses automatic failover, preemption and health-driven switching on both nodes for 1-24 h chosen in the GUI (default 4 h, it switches itself off; the console and API accept up to 72 h). Split-brain protection stays on. Use it for planned work.
 
 ## Pre-flight and dry run
 
@@ -56,7 +56,7 @@ Settings tab (some under *advanced*):
 ## Monitoring
 
 - **Notifications**: always to syslog; webhook (JSON) at a chosen level; e-mail through Monit by adding a custom service that runs `/usr/local/opnsense/scripts/OPNsense/ActiveStandby/monit_check.sh` with the test "status != 0" (exit 0 healthy, 1 warning, 2 critical).
-- **Prometheus**: scrape `/api/activestandby/metrics/index` on each node with an API key (basic auth). Give the key the read-only privilege.
+- **Prometheus**: scrape `/api/activestandby/metrics/index` on each node with an API key (basic auth). Give the key the privilege *System: Active/Standby HA (read-only status and metrics)*.
 - **Failover history** is on the Operations tab; the dashboard widget shows state and sync.
 - **Audit**: manual actions appear in the event log and syslog as `AUDIT <action>:by:<user>:from:<ip>`.
 
@@ -83,9 +83,21 @@ Settings tab (some under *advanced*):
 | Still asked to log in after a failover | *Keep GUI logins across a failover* must be on, on the active node, and the nodes must serve the same certificate (it is part of the replicated configuration) |
 | Standby GUI says "saved" but nothing changes | expected: the standby's configuration is locked |
 
-## Known limitations
+## Requirements and limitations in production
 
-- IPv4 only for gratuitous ARP; IPv6 neighbour announcements are not sent.
+**Network**
+- **Add a management interface.** Over a direct HA cable alone, the standby cannot tell "the other firewall lost power" from "my own cable is unplugged", so it does **not** take over by itself after a power loss unless you allow that under Settings > Safety (risk: both firewalls active if only the cable is cut). A management interface, ideally with *management probe targets*, removes the ambiguity. The wizard and the pre-flight warn about it.
+- The HA link should be a dedicated NIC with the same MTU on both sides. A management or HA interface may be a VLAN on a shared trunk (its parent NIC is kept up on the standby).
+- **Switch:** one LAG per firewall (or LACP fast), no port security or sticky MAC (the shared MAC moves between ports at a failover), no MAC-flap protection on the data ports, spanning-tree edge (portfast) on them. After a takeover the link of a real NIC needs one to a few seconds to come up: the takeover waits for the carrier (up to 8 s) before it announces the MAC, and repeats the announcement for a few seconds.
+- **Detection time:** the default is 3 s. Use 5 s or more on production hardware under real load; 1-2 s is for dedicated links and quiet firewalls.
+
+**Supported and not supported**
+- Static IPv4 on the shared interfaces. VLANs and LAGG are supported (lab-tested), bridges and tunnel devices are not verified.
+- **PPPoE is not supported**: the old active firewall keeps its session while the new one dials, and many providers refuse a second login. **DHCP on the WAN is best effort** (the lease is per node; the new active firewall asks again). **IPv6 is not supported for failover** (no neighbour announcements, router-advertisement and prefix-delegation state is per node).
+- OpenVPN instances, WireGuard and IPsec follow the active role. Services that bind to interface addresses (NTP, captive portal, Suricata, HAProxy, Dynamic DNS) are restarted after a takeover when they are installed; others may need a restart.
+- Do not restore a configuration backup on the active firewall that lacks this plugin's section: the demote then refuses (it would cut the HA link). Restore the settings first. To change the standby's configuration use `hasyncd ctl unlock`.
+- Monit's default checks will alert on the standby (IPsec and the gateway monitor are stopped by design): exclude them there.
+- A single firewall that reboots (for example after a power cut) is down for the whole boot, plus 10 s (primary) or 30 s (secondary) before it promotes.
 - Hiding the core "High Availability" menu is cosmetic; the pages stay reachable by URL.
-- Intel X710 (`ixl`) behaviour on admin-down and the real boot window must be confirmed with `lab/hw-probe.sh` before production.
-- Verified with a real IKEv2/PSK site-to-site tunnel to a third OPNsense node (the tunnel re-establishes through the new active node and carries traffic) and with dpinger following the active role. Not verified: peers other than OPNsense/strongSwan.
+
+**Before production, on the real hardware** (see `lab/hw-probe.sh`): link behaviour of the `ixl` NICs when the standby takes them down (does the switch see link loss?), a failover with a traffic generator, a power cut of the active firewall, a cold start of both firewalls together, a VLAN-specific shared MAC with promiscuous mode off, and a promote with your real number of VLANs.

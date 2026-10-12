@@ -141,3 +141,14 @@ func TestMaintenanceNewestChangeWins(t *testing.T) {
 		t.Fatal("a newer change from the peer must be adopted")
 	}
 }
+
+func TestPinnedKeyRegexp(t *testing.T) {
+	out := "pinned lan(hn1)=02:5a:75:41:a1:18 opt3(vlan01)=02:5f:9a:74:72:33"
+	var keys []string
+	for _, m := range pinnedKey.FindAllStringSubmatch(out, -1) {
+		keys = append(keys, m[1])
+	}
+	if len(keys) != 2 || keys[0] != "lan" || keys[1] != "opt3" {
+		t.Fatalf("keys = %v", keys)
+	}
+}

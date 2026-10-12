@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -23,8 +25,6 @@ func osStat(path string) (time.Time, error) {
 }
 
 func peerHostPort(st State, port int) string { return net.JoinHostPort(st.PeerAddr, fmt.Sprint(port)) }
-
-func peerURL(st State, path string) string { return "https://" + peerHostPort(st, st.PeerPort) + path }
 
 // execShell runs a fixed script through /bin/sh (never with operator input).
 func execShell(script string) (string, error) {
@@ -55,10 +55,17 @@ func hardenFiles(dir string) {
 // runs unprivileged and cannot read the state directory.
 const roleMarker = "/var/run/activestandby.state"
 
-func writeRoleMarker(st State) {
+func writeRoleMarker(st State) { writeMarker(st, nil) }
+
+// writeMarker publishes the role (first line) and, on the second line, flags the status-bar notice turns into warnings:
+// maintenance, syncfail, peerdown, drift, versions.
+func writeMarker(st State, flags []string) {
 	v := "standalone"
 	if st.PeerFP != "" && (st.State == StateActive || st.State == StateStandby) {
 		v = st.State
+	}
+	if len(flags) > 0 {
+		v += "\n" + strings.Join(flags, " ")
 	}
 	if b, err := os.ReadFile(roleMarker); err == nil && string(b) == v {
 		return
@@ -89,4 +96,68 @@ func (a *atomicTime) Get() time.Time {
 func hostName() string {
 	h, _ := os.Hostname()
 	return h
+}
+
+// markerStep refreshes the marker with the conditions an administrator should notice on every page.
+func (d *Daemon) markerStep() {
+	st := d.store.Get()
+	var flags []string
+	if st.PeerFP != "" && st.State != "" {
+		if d.maintenanceOn() {
+			flags = append(flags, "maintenance")
+		}
+		if st.SyncError != "" {
+			flags = append(flags, "syncfail")
+		}
+		if alive, _, _ := d.hb.Snapshot(); !alive {
+			flags = append(flags, "peerdown")
+		}
+		if d.driftReason() != "" {
+			flags = append(flags, "drift")
+		}
+		if _, mism := d.versionInfo(); mism {
+			flags = append(flags, "versions")
+		}
+	}
+	writeMarker(st, flags)
+}
+
+// peerEndpoint is the address to call the peer on: the HA link, or, when the heartbeat says that path is dead while the
+// management path is alive, the management address (the peer API listens on both, with the same pinned certificate).
+func (d *Daemon) peerEndpoint(st State) string {
+	if st.PeerMgmt != "" && !d.hb.PathAlive("ha") && d.hb.PathAlive("mgmt") {
+		return st.PeerMgmt
+	}
+	return st.PeerAddr
+}
+
+var (
+	validMu    sync.Mutex
+	validCache = map[string]validEntry{}
+)
+
+type validEntry struct {
+	mtime time.Time
+	size  int64
+	ok    bool
+}
+
+// cachedValid memoises a file check by modification time and size: the heartbeat asks about active.xml several times a
+// second and must not read and scan a 60 KB file every time.
+func cachedValid(path string, check func() bool) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	validMu.Lock()
+	e, ok := validCache[path]
+	validMu.Unlock()
+	if ok && e.mtime.Equal(fi.ModTime()) && e.size == fi.Size() {
+		return e.ok
+	}
+	r := check()
+	validMu.Lock()
+	validCache[path] = validEntry{fi.ModTime(), fi.Size(), r}
+	validMu.Unlock()
+	return r
 }

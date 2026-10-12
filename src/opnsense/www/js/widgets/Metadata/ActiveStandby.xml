@@ -28,6 +28,9 @@
             <maintenance>Maintenance</maintenance>
             <maintenanceon>MAINTENANCE MODE</maintenanceon>
             <problems>Problem</problems>
+            <primary>primary</primary>
+            <secondary>secondary</secondary>
+            <daemondown>HA daemon not running: click to open the settings</daemondown>
         </translations>
     </activestandby>
 </metadata>

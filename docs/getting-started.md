@@ -4,7 +4,7 @@
 
 - Two machines with **identical hardware layout**: the same NIC names (for example `ixl0..ixl3`), the same OPNsense version, the same installed plugins. Pairing compares OPNsense version, kernel, NIC names and plugin versions and refuses to pair when they differ.
 - A **dedicated HA link**: one cable between the two machines (a single port is enough), static IPv4 on each side, for example 10.99.0.1/24 and 10.99.0.2/24.
-- Optionally a **management interface** on a shared management network. It stays up on the standby, carries a second heartbeat path and lets you reach the standby's GUI.
+- A **management interface** on a shared management network (strongly recommended). It stays up on the standby, carries a second heartbeat path, lets you reach the standby's GUI, and is what lets the standby take over by itself after a power loss of the other firewall (see [operations](operations.md#requirements-and-limitations-in-production)).
 - Static IPv4 addresses on the interfaces that will be shared. The wizard warns about DHCP/PPPoE, CARP virtual IPs and the built-in High Availability sync (clear those first).
 
 ## Install

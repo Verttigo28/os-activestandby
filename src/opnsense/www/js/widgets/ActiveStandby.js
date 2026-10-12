@@ -26,8 +26,13 @@ export default class ActiveStandby extends BaseTableWidget {
 
     async onWidgetTick() {
         const s = await this.ajaxCall('/api/activestandby/pairing/status');
-        if (!s || s.role === undefined || s.role === 'standalone') {
+        if (!s || s.role === undefined || (s.role === 'standalone' && s.daemon === 'up')) {
             $('#as-table').html(`<a href="/ui/activestandby">${this.translations.unconfigured}</a>`);
+            return;
+        }
+        if (s.daemon !== 'up') {
+            // the daemon is the product: say it plainly instead of drawing a healthy picture
+            $('#as-table').html(`<a href="/ui/activestandby" style="color:#c00"><b>${this.translations.daemondown}</b></a>`);
             return;
         }
         // events change rarely: refresh every 5th tick only
@@ -38,13 +43,13 @@ export default class ActiveStandby extends BaseTableWidget {
         const t = this.translations;
         const active = s.state === 'active';
         const stateBadge = this.badge(active ? t.active : t.standby, active ? 'green' : '#6c757d');
-        const role = s.role === 'master' ? 'primary' : 'secondary';
+        const role = s.role === 'master' ? t.primary : t.secondary;
 
         let peer = s.peer_state ? `<b>${this.esc(s.peer_hostname || "")}</b> ` + this.badge(s.peer_state === 'active' ? t.active : t.standby, s.peer_state === 'active' ? 'green' : '#6c757d') : '-';
         peer += ' ' + this.esc(s.peer_addr || '') + ' ' + (s.peer_alive ? t.reachable : `<b style="color:#c00">${t.unreachable}</b>`);
 
         const p = s.paths || {};
-        const dot = ok => `<span style="color:${ok ? 'green' : '#c00'}">&#9679;</span>`;
+        const dot = ok => `<span style="color:${ok ? 'green' : '#c00'}" title="${ok ? 'OK' : 'DOWN'}">${ok ? '&#9679;' : '&#9888;'}</span>`;
         let links = `${dot(p.ha)} ${t.ha}`;
         if (s.peer_mgmt) {
             links += ` &nbsp; ${dot(p.mgmt)} ${t.mgmt}`;
@@ -62,26 +67,29 @@ export default class ActiveStandby extends BaseTableWidget {
         }
 
         const rows = [
-            [t.thisnode, `<b>${this.esc(s.hostname || "")}</b> ${stateBadge} (${role}) ${this.esc(s.ha_address || "")}`],
-            [t.peer, peer],
-            [t.links, links],
-            [t.sync, sync],
+            ['this', t.thisnode, `<b>${this.esc(s.hostname || "")}</b> ${stateBadge} (${role}) ${this.esc(s.ha_address || "")}`],
+            ['peer', t.peer, peer],
+            ['links', t.links, links],
+            ['sync', t.sync, sync],
         ];
         if (s.maintenance) {
-            rows.push([t.maintenance, `<span class="badge badge-pill" style="background-color:#31708f">${t.maintenanceon}</span>`]);
+            rows.push(['maint', t.maintenance, `<span class="badge badge-pill" style="background-color:#31708f">${t.maintenanceon}</span>`]);
         }
         if (s.health || s.drift) {
-            rows.push([t.problems, `<span style="color:#c00">${this.esc(s.health || s.drift)}</span>`]);
+            rows.push(['problems', t.problems, `<span style="color:#c00">${this.esc(s.health || s.drift)}</span>`]);
         }
         if (s.version_mismatch) {
-            rows.push([t.versions, `<span style="color:#e68a00">${this.esc(s.os_version)} / ${this.esc(s.peer_os_version)}</span>`]);
+            rows.push(['versions', t.versions, `<span style="color:#e68a00">${this.esc(s.os_version)} / ${this.esc(s.peer_os_version)}</span>`]);
         }
         if (s.auto_blocked) {
-            rows.push([t.held, `<span style="color:#c00">${this.esc(s.auto_blocked)}</span>`]);
+            rows.push(['held', t.held, `<span style="color:#c00">${this.esc(s.auto_blocked)}</span>`]);
         }
         if (this.lastEvent) {
-            rows.push([t.lastevent, `<small>${this.esc(this.lastEvent.time.replace('T', ' ').replace('Z', ''))}<br>${this.esc(this.lastEvent.msg)}</small>`]);
+            rows.push(['last', t.lastevent, `<small>${this.esc(this.lastEvent.time.replace('T', ' ').replace('Z', ''))}<br>${this.esc(this.lastEvent.msg)}</small>`]);
         }
-        rows.forEach((r, i) => this.updateTable('as-table', [r], `as_row_${i}`));
+        // stable row ids: a row that is no longer true (maintenance over, problem gone) is removed instead of lingering
+        const keep = new Set(rows.map(r => r[0]));
+        ['this', 'peer', 'links', 'sync', 'maint', 'problems', 'versions', 'held', 'last'].forEach(k => { if (!keep.has(k)) { $(`#as_row_${k}`).remove(); } });
+        rows.forEach(r => this.updateTable('as-table', [[r[1], r[2]]], `as_row_${r[0]}`));
     }
 }

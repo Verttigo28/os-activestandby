@@ -54,7 +54,10 @@ func bootGuard() error {
 			}
 		}
 		set, err := ops.ifaces(activeXML(st.dir))
-		if err == nil && st.Get().State == StateStandby {
+		if err != nil {
+			set, err = ops.ifaces(configPath()) // the early hook may have failed (disk full, read-only /conf): guard from the live config
+		}
+		if err == nil { // any paired node boots silent, whatever the state file says
 			if up, _ := sh("ifconfig", "-l", "-u"); up != "" {
 				upSet := map[string]bool{}
 				for _, n := range strings.Fields(up) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -244,7 +245,7 @@ func (d *Daemon) peerPostJSON(path string, v any) (map[string]any, error) {
 	b, _ := json.Marshal(v)
 	cl := d.peerClient(st.PeerFP, nil)
 	cl.Timeout = 15 * time.Second
-	resp, err := cl.Post(peerURL(st, path), "application/json", strings.NewReader(string(b)))
+	resp, err := cl.Post("https://"+net.JoinHostPort(d.peerEndpoint(st), fmt.Sprint(st.PeerPort))+path, "application/json", strings.NewReader(string(b)))
 	if err != nil {
 		return nil, err
 	}
