@@ -48,7 +48,7 @@ const (
 )
 
 var (
-	resolveEvery  = time.Second
+	resolveEvery  = time.Second // read and written only through resolveTiming and setResolveTiming (a stray goroutine of an earlier test may still poll)
 	resolveWindow = 45 * time.Second
 	// A promote request is valid for reqTTL after it was sent (the peer refuses it later, allowing reqSkew for clock differences):
 	// a request that sat in a frozen peer's socket buffer must not be executed minutes later, when this node has long moved on.
@@ -221,7 +221,8 @@ const (
 
 // resolveTransition asks the peer what became of tid until the answer is conclusive or the window is over.
 func (d *Daemon) resolveTransition(tid string, sentAt time.Time) (txOutcome, string) {
-	deadline := time.Now().Add(resolveWindow)
+	every, window := resolveTiming()
+	deadline := time.Now().Add(window)
 	last := "no answer from the peer"
 	for {
 		out, err := d.callPeer("/v1/abort?tid="+url.QueryEscape(tid), 5*time.Second)
@@ -250,7 +251,7 @@ func (d *Daemon) resolveTransition(tid string, sentAt time.Time) (txOutcome, str
 		if time.Now().After(deadline) {
 			return outcomeUnknown, last
 		}
-		time.Sleep(resolveEvery)
+		time.Sleep(every)
 	}
 }
 
@@ -286,4 +287,25 @@ func (d *Daemon) callPeer(path string, timeout time.Duration) (map[string]any, e
 		return d.act.peerCall(path, timeout)
 	}
 	return d.peerCall(path, timeout)
+}
+
+var timingMu sync.RWMutex
+
+func resolveTiming() (every, window time.Duration) {
+	timingMu.RLock()
+	defer timingMu.RUnlock()
+	return resolveEvery, resolveWindow
+}
+
+// setResolveTiming changes the polling of the outcome of a transition (the tests shorten it) and returns the function that restores it.
+func setResolveTiming(every, window time.Duration) (restore func()) {
+	timingMu.Lock()
+	oe, ow := resolveEvery, resolveWindow
+	resolveEvery, resolveWindow = every, window
+	timingMu.Unlock()
+	return func() {
+		timingMu.Lock()
+		resolveEvery, resolveWindow = oe, ow
+		timingMu.Unlock()
+	}
 }

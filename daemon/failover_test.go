@@ -35,9 +35,7 @@ func standbyState(role string, epoch uint64) State {
 // fastResolve shortens the polling of the transition outcome.
 func fastResolve(t *testing.T) {
 	t.Helper()
-	oe, ow := resolveEvery, resolveWindow
-	resolveEvery, resolveWindow = 2*time.Millisecond, 200*time.Millisecond
-	t.Cleanup(func() { resolveEvery, resolveWindow = oe, ow })
+	t.Cleanup(setResolveTiming(2*time.Millisecond, 200*time.Millisecond))
 }
 
 // fakeSystem installs promote/demote fakes that only change the stored state, and counts the calls.
@@ -874,7 +872,7 @@ func shortRequestValidity(t *testing.T) {
 func TestSilentUnreachablePeerEndsTheWaitEarly(t *testing.T) {
 	fastResolve(t)
 	shortRequestValidity(t)
-	resolveWindow = 5 * time.Second // the window itself is long: the early exit must not wait for it
+	t.Cleanup(setResolveTiming(2*time.Millisecond, 5*time.Second)) // the window itself is long: the early exit must not wait for it
 	a := newHANode(t, activeState(RoleMaster, 7))
 	a.act.peerCall = func(string, time.Duration) (map[string]any, error) { return nil, errors.New("no route to host") }
 	silence(a, time.Hour) // no heartbeat on any path
@@ -888,13 +886,13 @@ func TestSilentUnreachablePeerEndsTheWaitEarly(t *testing.T) {
 func TestSilentPeerIsNotGivenUpOnBeforeItsRequestExpired(t *testing.T) {
 	fastResolve(t)
 	// default validity (10 s + 5 s): a request sent just now may still be executed by a peer that comes back
-	resolveWindow = 300 * time.Millisecond
+	t.Cleanup(setResolveTiming(2*time.Millisecond, 300*time.Millisecond))
 	a := newHANode(t, activeState(RoleMaster, 7))
 	a.act.peerCall = func(string, time.Duration) (map[string]any, error) { return nil, errors.New("timeout") }
 	silence(a, time.Hour)
 	t0 := time.Now()
 	out, _ := a.resolveTransition(newTID(), time.Now())
-	if out != outcomeUnknown || time.Since(t0) < resolveWindow {
+	if out != outcomeUnknown || time.Since(t0) < windowNow() {
 		t.Fatalf("returned after %v: the wait must last for the window while the request can still be executed", time.Since(t0))
 	}
 }
@@ -902,14 +900,14 @@ func TestSilentPeerIsNotGivenUpOnBeforeItsRequestExpired(t *testing.T) {
 func TestAnAnsweringButSlowPeerKeepsBeingAsked(t *testing.T) {
 	fastResolve(t)
 	shortRequestValidity(t)
-	resolveWindow = 200 * time.Millisecond
+	t.Cleanup(setResolveTiming(2*time.Millisecond, 200*time.Millisecond))
 	a := newHANode(t, activeState(RoleMaster, 7))
 	var polls atomic.Int32
 	a.act.peerCall = func(string, time.Duration) (map[string]any, error) { polls.Add(1); return nil, errors.New("timeout") }
 	seePeer(a, hbMsg{State: StateStandby}) // heartbeats arrive: the peer is alive, only this call fails
 	t0 := time.Now()
 	out, _ := a.resolveTransition(newTID(), time.Now().Add(-time.Minute))
-	if out != outcomeUnknown || time.Since(t0) < resolveWindow || polls.Load() < 3 {
+	if out != outcomeUnknown || time.Since(t0) < windowNow() || polls.Load() < 3 {
 		t.Fatalf("a live peer must be asked until the window is over: %v after %v, %d polls", out, time.Since(t0), polls.Load())
 	}
 }
@@ -987,3 +985,5 @@ func TestFreezeGapFollowsTheDetectionTime(t *testing.T) {
 		}
 	}
 }
+
+func windowNow() time.Duration { _, w := resolveTiming(); return w }

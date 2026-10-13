@@ -162,17 +162,17 @@ jobs:
       - name: checksums and key fingerprint
         id: sums
         run: |
-          cd dist && sha256sum os-activestandby-*.pkg > SHA256SUMS
-          (cd ../src/sbin && sha256sum hasyncd) >> SHA256SUMS # the daemon binary on its own, for those who check what runs
-          FP=$(openssl rsa -pubin -in ../keys/activestandby.pub -outform DER 2>/dev/null | openssl dgst -sha256 | sed 's/^.* //')
-          { echo "Package signing key (keys/activestandby.pub) SHA-256 fingerprint:"; echo; echo "    $FP"; } > ../release-note.md
+          cp src/sbin/hasyncd dist/hasyncd-freebsd-amd64 # the daemon binary on its own, for those who check what runs
+          (cd dist && sha256sum os-activestandby-*.pkg hasyncd-freebsd-amd64 > SHA256SUMS && sha256sum -c SHA256SUMS)
+          FP=$(openssl rsa -pubin -in keys/activestandby.pub -outform DER 2>/dev/null | openssl dgst -sha256 | sed 's/^.* //')
+          { echo "Package signing key (keys/activestandby.pub) SHA-256 fingerprint:"; echo; echo "    $FP"; } > release-note.md
       - name: signed provenance for the package (public repositories only)
         if: ${{ !github.event.repository.private }} # GitHub offers attestations for public repositories (or paid plans) only
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: |
             dist/os-activestandby-*.pkg
-            src/sbin/hasyncd
+            dist/hasyncd-freebsd-amd64
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           generate_release_notes: true
@@ -180,6 +180,7 @@ jobs:
           files: |
             dist/os-activestandby-*.pkg
             dist/SHA256SUMS
+            dist/hasyncd-freebsd-amd64
       - name: publish the signed pkg repository (GitHub Pages branch gh-pages)
         if: hashFiles('dist/repo/.signed') != ''
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4
