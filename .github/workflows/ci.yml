@@ -27,7 +27,7 @@ jobs:
         working-directory: daemon
         run: |
           go mod verify
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           govulncheck ./...
       - name: format, vet, test (with the race detector)
         working-directory: daemon
