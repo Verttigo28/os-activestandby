@@ -34,6 +34,8 @@ type State struct {
 	SyncOK     string `json:"sync_ok,omitempty"`
 	PeerMgmt   string `json:"peer_mgmt,omitempty"`
 	Epoch      uint64 `json:"epoch"`
+	// LeaderEpoch is the highest leadership epoch of the configuration pushes accepted from the peer (see checkConfigPush); 0 after pairing.
+	LeaderEpoch uint64 `json:"leader_epoch,omitempty"`
 	// Corrupt: the state files were unreadable but this node shows signs of having been paired. It then
 	// runs as a silent standby with no peer pinned until it is re-paired. Never active.
 	Corrupt bool `json:"corrupt,omitempty"`
@@ -208,6 +210,7 @@ func (s *Store) PairNow(role, addr string, port int, fp string) error {
 			st.State = StateActive
 		}
 		st.PairedAt = time.Now().UTC().Format(time.RFC3339)
+		st.LeaderEpoch = 0 // a new pair: what was accepted from a former peer does not count
 		if st.Epoch == 0 {
 			st.Epoch = 1
 		}

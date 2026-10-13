@@ -2,6 +2,17 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 1.0.3
+Release of the work of 1.0.2 (the tag v1.0.2 was never built: its workflow was invalid) plus the findings of a second audit; see [audit](docs/audit.md#eighth-round-103-an-external-audit-of-102).
+### Added
+- **Protocol version** in the heartbeat and on the configuration push. A node whose peer speaks a newer protocol refuses a configuration or ruleset push and a graceful failover and says which node to update; the pre-flight fails; the automatic takeover and the split-brain resolution are never blocked by it.
+- **Leadership generation on `/v1/config`**: `X-Epoch`, checked against the highest epoch accepted from this peer (`leader_epoch` in the state file, reset when a pair is formed). Plugin 1.0.1 and older senders are still accepted (rolling upgrade).
+### Fixed
+- The enforcer no longer returns silently when a standby cannot read its saved configuration: it falls back to the configuration in use and reports it; the rollback of a failed configuration push reports its own failures.
+- CI: valid workflow, `govulncheck` v1.8.0, `staticcheck` 2026.2.2, Go 1.27.2, checksums of the daemon binary verified; two test races fixed.
+### Tests
+- The property test now checks the network identity (what the fake interface actions did) and runs 40 seeds of 300 steps; protocol and leadership tests.
+
 ## 1.0.2
 ### Fixed and hardened (an independent comparison with the audit brief, see [audit](docs/audit.md#seventh-round-102-gap-analysis-against-the-audit-brief))
 - **Role file.** The role is now changed on a copy, checked and saved, and only then published; a failed write (disk full, I/O error, fsync, rename) leaves memory and disk unchanged and returns the error. A node that goes down or takes over follows the machine even if the disk refuses (`UpdateSafe`): the failure is logged and the node is shown as degraded. A state file that is valid JSON but not a state (`{}`, `null`, unknown role) counts as damaged. `Get` returns a deep copy.

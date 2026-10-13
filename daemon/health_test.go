@@ -46,6 +46,18 @@ func healthSwitchOutcome(t *testing.T, peer hbMsg) (switched bool, events string
 	for i := 0; i < 50 && demotes.Load() == 0; i++ {
 		time.Sleep(10 * time.Millisecond)
 	}
+	// the failover goes on in the background after the demotion: let it finish and any write of the state end, so that nothing writes
+	// into the temporary directory while the test cleans it up
+	if demotes.Load() > 0 {
+		for i := 0; i < 200 && (d.failing.Load() || i < 3); i++ {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	func() { // returns once a save in progress is over
+		d.store.mu.Lock()
+		defer d.store.mu.Unlock()
+		_ = d.store.data.State
+	}()
 	var b strings.Builder
 	for _, e := range d.ev.Recent(20) {
 		b.WriteString(e.Msg + " | ")

@@ -67,6 +67,9 @@ func (d *Daemon) localChecks() []Check {
 	if st.PeerFP == "" {
 		return []Check{fail("pairing", "this node is not paired")}
 	}
+	if why := d.protoBlock(); why != "" {
+		cs = append(cs, fail("protocol", why+". Configuration and ruleset pushes and a graceful failover are refused until then; the automatic takeover is not affected"))
+	}
 	if d.cfg.FenceRequired && d.cfg.FenceCommand == "" {
 		cs = append(cs, warn("fencing", "fencing is required for an automatic takeover but no fencing command is configured: if the active firewall fails, this one will not take over by itself"))
 	}

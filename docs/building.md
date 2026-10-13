@@ -14,13 +14,13 @@ lab/                           Hyper-V lab tooling and notes (not part of the pa
 ## Build the package
 Anywhere with Go 1.22 or newer (`go.mod` language level; CI builds and tests with 1.27.2 (Go before 1.27.2 has standard-library vulnerabilities that this daemon reaches), use that or newer for a release) and a FreeBSD/OPNsense host to run `pkg create` (any OPNsense node works, e.g. a spare VM):
 ```powershell
-.\build\build.ps1 -Version 1.0.2 -BuildNode peer      # lab shortcut; produces dist\os-activestandby-<version>.pkg
+.\build\build.ps1 -Version 1.0.3 -BuildNode peer      # lab shortcut; produces dist\os-activestandby-<version>.pkg
 ```
 By hand:
 ```sh
 cd daemon && go test ./... && GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o ../src/sbin/hasyncd .
 # copy the repo to a FreeBSD/OPNsense host, then:
-sh build/build-pkg.sh /path/to/repo 1.0.2 /path/to/out
+sh build/build-pkg.sh /path/to/repo 1.0.3 /path/to/out
 ```
 The package has no dependencies, ABI `FreeBSD:*:amd64`, and its install/removal scripts refresh the GUI caches and restart configd.
 

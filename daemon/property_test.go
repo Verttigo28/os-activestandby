@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -12,24 +14,43 @@ import (
 // (a paired node always boots as standby), an operator who promotes the standby by hand while the other is active, nobody active.
 // After every step the safety properties must hold:
 //
-//	S1  at most one node is active when a step has finished (the split-brain resolution included);
+//	S1  the shared IP and MAC are on at most one node (what the fake interface actions did, not what the state file says) when a step has
+//	    finished, the split-brain resolution included; and a node that has them believes it is active;
 //	S2  the epoch of a node never decreases;
 //
 // It proves the decision logic under many interleavings, not the behaviour on real interfaces (see docs/validation.md).
 
 type pairModel struct {
-	t      *testing.T
-	a, b   *Daemon
-	fa, fb fakeSystem
-	epoch  map[*Daemon]uint64
+	t    *testing.T
+	a, b *Daemon
+	// exposed: the node really has the shared addresses and MAC on its interfaces (what the fake system actions did), not what its
+	// state file says. The invariant is about this.
+	exposed map[*Daemon]*atomic.Bool
+	epoch   map[*Daemon]uint64
 }
 
 func newPairModel(t *testing.T) *pairModel {
-	m := &pairModel{t: t, epoch: map[*Daemon]uint64{}}
+	reliableDisk(t)
+	m := &pairModel{t: t, epoch: map[*Daemon]uint64{}, exposed: map[*Daemon]*atomic.Bool{}}
 	m.a = newHANode(t, activeState(RoleMaster, 5))
 	m.b = newHANode(t, standbyState(RoleStandby, 5))
-	m.fa.install(m.a)
-	m.fb.install(m.b)
+	for i, d := range m.nodes() {
+		e := &atomic.Bool{}
+		e.Store(i == 0) // A starts as the active node: it has the addresses
+		m.exposed[d] = e
+		d := d
+		d.act.promote = func(string) error {
+			e.Store(true) // the interfaces take the shared addresses and MAC
+			return d.store.Update(func(s *State) { s.State = StateActive; s.Epoch++ })
+		}
+		d.act.demoteHook = func(_ string, after func()) error {
+			e.Store(false) // the data interfaces go down and lose the addresses
+			if after != nil {
+				after()
+			}
+			return d.store.Update(func(s *State) { s.State = StateStandby })
+		}
+	}
 	return m
 }
 
@@ -64,6 +85,16 @@ func (m *pairModel) check(step int, what string) {
 	if n := len(m.actives()); n > 1 {
 		m.t.Fatalf("step %d (%s): both nodes are active (A epoch %d, B epoch %d)", step, what, m.a.store.Get().Epoch, m.b.store.Get().Epoch)
 	}
+	// the invariant is about the network: the shared identity is on at most one node, and a node that has it believes it is active
+	// (a node that believes it is standby while its interfaces still carry the identity is the situation the enforcer must remove)
+	if m.exposed[m.a].Load() && m.exposed[m.b].Load() {
+		m.t.Fatalf("step %d (%s): the shared IP and MAC are on both nodes at once", step, what)
+	}
+	for _, d := range m.nodes() {
+		if m.exposed[d].Load() != (d.store.Get().State == StateActive) {
+			m.t.Fatalf("step %d (%s): %s has the identity on its interfaces=%v but its state is %s", step, what, m.name(d), m.exposed[d].Load(), d.store.Get().State)
+		}
+	}
 	for _, d := range m.nodes() {
 		e := d.store.Get().Epoch
 		if e < m.epoch[d] {
@@ -93,13 +124,13 @@ func (m *pairModel) resolveSplitBrain() {
 }
 
 func TestRoleProtocolKeepsAtMostOneActiveNode(t *testing.T) {
-	for _, seed := range []int64{1, 2, 3, 7, 42, 1000} {
+	for seed := int64(1); seed <= 40; seed++ {
 		t.Run(fmt.Sprintf("seed %d", seed), func(t *testing.T) {
 			fastResolve(t)
 			rng := rand.New(rand.NewSource(seed))
 			m := newPairModel(t)
 			m.check(0, "start")
-			for step := 1; step <= 150; step++ {
+			for step := 1; step <= 300; step++ {
 				var what string
 				switch act := m.actives(); {
 				case len(act) == 0:
@@ -124,6 +155,7 @@ func TestRoleProtocolKeepsAtMostOneActiveNode(t *testing.T) {
 					// a node restarts: a paired node always comes up as standby, whatever it was
 					y := m.nodes()[rng.Intn(2)]
 					what = fmt.Sprintf("%s restarts", m.name(y))
+					m.exposed[y].Store(false) // the interfaces are down while it reboots, and a paired node comes back silent
 					y.store.Update(func(s *State) { s.State = StateStandby })
 				default:
 					// an operator promotes the standby by hand while the other node is active: a double active that must resolve
@@ -205,4 +237,13 @@ func TestFailoverUnderPacketLossAndLateDelivery(t *testing.T) {
 			t.Logf("loss %.0f%%: %v", p*100, outcomes)
 		})
 	}
+}
+
+// reliableDisk: the model tests are about the decisions, not about the disk (state_fault_test.go does that): the state is accepted
+// without touching the file system, so that a refused rename of the wasm test runner on Windows cannot look like a protocol failure.
+func reliableDisk(t *testing.T) {
+	t.Helper()
+	old := fsWrite
+	fsWrite = func(string, []byte, os.FileMode) error { return nil }
+	t.Cleanup(func() { fsWrite = old })
 }

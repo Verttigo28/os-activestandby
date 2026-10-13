@@ -137,6 +137,9 @@ func (d *Daemon) rulesetStep() {
 	if !alive || peer.State != StateStandby || peer.Warm == "" { // a peer that does not run the warm or hot mode takes no ruleset
 		return
 	}
+	if heartbeatProto(peer) > protoVersion { // a peer that speaks a newer protocol: update this node first (shown by the pre-flight)
+		return
+	}
 	b, ok := readActiveRules()
 	if !ok {
 		return

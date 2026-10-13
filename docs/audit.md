@@ -117,7 +117,7 @@ The brief in `todo/version-1.x.md` was compared with the code, the tests, the CI
 | 3 persistence | The role was changed in memory before it was saved; no test could make the disk fail | transactional update with a defined commit point, `UpdateSafe` for what already happened, deep copy, validation at save and at load; fault-injection tests for a full disk, EIO, fsync, rename, directory sync, crashes between the steps, torn and invalid files, concurrent updates ([security](security.md#review-of-101-to-102-persistence-promote-request-fencing-policy)) |
 | 4 promotion | A failed save after the takeover left the node active with an error returned to the peer | the takeover is committed with `UpdateSafe`; a failed save marks the node degraded and the answer stays "promoted" |
 | 6 `/v1/promote` | `tid`, `epoch`, `exp` optional, parse errors ignored | required and strict; table test of 18 malformed requests, bounds on epoch and validity, replay after the log was trimmed |
-| 7 `/v1/config` | headers not checked; "a deposed active node can overwrite" | headers checked; the second claim was wrong (a push is accepted only by a standby), documented; no epoch comparison on purpose (it could stop the sync after a re-pairing) |
+| 7 `/v1/config` | headers not checked; "a deposed active node can overwrite" | headers checked; the second claim was wrong (a push is accepted only by a standby), documented; no epoch comparison on purpose (it could stop the sync after a re-pairing) | (superseded in 1.0.3: a leadership generation is now carried and checked, see the eighth round)
 | 5 split-brain | the invariant was asserted in a few places only; no policy without fencing | seeded property test of the role protocol (failovers with lost requests/answers, restarts, a manual promotion of the standby, nobody active) with the invariants "at most one active" and "epoch never decreases", mutation-checked; losses of 10/30/50 %, duplicates and late delivery; new option `fence_required`; fencing policy table test |
 | 10 services | a service that failed to start was only logged | checked after the start; failure marks the node degraded |
 | 14 tests | no test of the configuration push | header and refusal tests |
@@ -125,7 +125,28 @@ The brief in `todo/version-1.x.md` was compared with the code, the tests, the CI
 | 19 documentation | old repository name in the install and verification commands; stale file names; build section out of date | corrected; certificate rotation and pfsync exposure documented; the limit without fencing stated at the top of the README |
 
 Not done, and why:
-- **A protocol version in the heartbeat** that blocks operations between versions: the mismatch of plugin versions is reported (pre-flight and events), but nothing refuses an operation. No wire change is pending that would need it; it comes with the first incompatible one.
 - **Latency simulation (500 ms, 2 s) in the unit tests**: the tests use losses, duplicates and late delivery with a seeded generator, not delays (they would need a simulated clock in the transition code). Delays and a frozen peer were measured on the lab and in the sandbox.
 - **`bootStandby` and the enforcer** are not covered by a Go test (they act on real interfaces); the sandbox and the hardware runs cover them.
 - Not run on this machine: `staticcheck` and `govulncheck` (programs cannot be started here); both run in the CI.
+
+## Eighth round (1.0.3): an external audit of 1.0.2
+
+A second, independent audit of the tag v1.0.2 confirmed that three of the items left open above mattered, and found problems in how they had been left. What was done:
+
+| Finding | Result |
+|---|---|
+| No protocol version: `checkVersions` warned but nothing was refused between versions | `proto` in the heartbeat (absent = 1) and `X-Proto` on the configuration push. A node whose peer speaks a newer protocol refuses what needs both sides to agree (configuration and ruleset push, graceful failover) with a message that says to update it first; the pre-flight fails with the same text. The safety paths (automatic takeover after a silence, split-brain resolution) never look at it. A newer sender is refused by the receiver as well |
+| `/v1/config` carried no leadership generation. The 1.0.2 answer (nothing, because comparing with the node's own epoch can wedge the sync) was incomplete | the sender gives its epoch (`X-Epoch`); the standby keeps the highest epoch it accepted from this peer (`leader_epoch`) and refuses a lower one (409). It is not the node's own epoch, so it follows the leader; it starts again at 0 when a pair is formed. A sender without `X-Proto` (plugin 1.0.1 or older, a rolling upgrade) is accepted without an epoch, a sender with one must give it |
+| The property test checked the `state` field, not the network identity | the model now tracks what the fake interface actions did: the shared IP and MAC must be on at most one node, and a node that has them must believe it is active. Mutation-checked (a demotion that leaves the identity makes it fail at step 1). 40 seeds of 300 steps. The model uses a disk that never fails, because the disk is covered by `state_fault_test.go` |
+| `enforceOnce` returned silently when the interface list could not be read | falls back to the configuration in use (as the boot guard does) and reports it once per ten minutes; if both fail it says that the devices are NOT being kept down |
+| Errors of the rollback of a failed configuration push were ignored | reported, and part of the answer to the active node |
+| CI: the manifest of checksums mixed paths and could not be verified | the daemon binary is copied to `dist/hasyncd-freebsd-amd64`, `SHA256SUMS` lists both files and the job runs `sha256sum -c`; the release carries the binary |
+| CI: the workflow of 1.0.2 was invalid (a colon in two step names), `govulncheck` v1.1.4 crashes on Go 1.27, `staticcheck` 2026.2.1 cannot read the export data of Go 1.27.2, a test raced with a background goroutine | fixed: quoted names, `govulncheck` v1.8.0, `staticcheck` 2026.2.2, guarded timing variables, the test waits for the failover to end. The v1.0.2 tag never produced a release (the workflow did not start); 1.0.3 is the first release with these checks |
+| `govulncheck` found nine standard-library vulnerabilities in the Go 1.27.0 that built every earlier release | Go 1.27.2 ([security](security.md)) |
+
+Still open, and said so:
+- **The commit of a takeover after the traffic is back** stays as it is: if the state cannot be saved the node is active, marked degraded, and boots as a silent standby after a restart. The alternative (writing an intent before touching the network and rolling it back on failure) changes what every reader of the state sees during a promotion; it needs its own design and a hardware test of a crash inside the window. Not done.
+- **A crash of the active node on real hardware with this version** has not been measured; the unit tests and the earlier hardware runs (docs/validation.md) are not a substitute.
+- **Latency in the unit tests** (500 ms, 2 s) needs an injectable clock in the transition code. Not done.
+- **`bootStandby` and the enforcer** have no Go test of their crash behaviour (only the new fallback is reasoned about); the sandbox and the lab cover them.
+- **Concurrency**: configuration push against a promotion, and goroutine leaks, have no dedicated test.

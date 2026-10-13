@@ -48,6 +48,7 @@ type hbMsg struct {
 	Plug    string `json:"plug,omitempty"`    // hasyncd (plugin) version of the sender
 	Warm    string `json:"warm,omitempty"`    // warm standby: "ready", or why this node could not take over fast (empty: classic mode)
 	Ruleset string `json:"ruleset,omitempty"` // hot standby: hash of the active node's ruleset it holds (ruleset.go)
+	Proto   int    `json:"proto,omitempty"`   // protocol version of the sender (proto.go); absent = 1
 
 	Links        map[string]bool `json:"links,omitempty"`         // carrier of the sender's data devices
 	LinksUnknown []string        `json:"links_unknown,omitempty"` // data devices whose link cannot be read (a standby keeps them down)
@@ -137,7 +138,7 @@ func (d *Daemon) localHB() hbMsg {
 	d.hb.seq++
 	s := d.hb.seq
 	d.hb.mu.Unlock()
-	return hbMsg{Role: st.Role, State: st.State, Epoch: st.Epoch, Seq: s, Mgmt: d.mgmtAddr(), TimeMs: time.Now().UnixMilli(), Ver: d.localVer, Plug: version,
+	return hbMsg{Role: st.Role, State: st.State, Epoch: st.Epoch, Proto: protoVersion, Seq: s, Mgmt: d.mgmtAddr(), TimeMs: time.Now().UnixMilli(), Ver: d.localVer, Plug: version,
 		Resync:       st.State == StateStandby && st.PeerFP != "" && (!activeValid(d.store.dir) || d.driftDetected()),
 		Links:        d.health.snapshotLinks(),
 		LinksUnknown: d.health.snapshotUnknown(),
@@ -256,6 +257,9 @@ func (d *Daemon) failover(force bool) (string, error) {
 	st := d.store.Get()
 	if st.PeerFP == "" {
 		return "", errors.New("not paired")
+	}
+	if why := d.protoBlock(); why != "" {
+		return "", errors.New(why)
 	}
 	if st.State != StateActive {
 		if _, err := d.callPeer(map[bool]string{true: "/v1/handover?force=1", false: "/v1/handover"}[force], handoverTimeout); err != nil {

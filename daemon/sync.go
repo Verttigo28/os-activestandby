@@ -80,6 +80,13 @@ func (d *Daemon) syncLoop() {
 				continue // config.xml changed, re-evaluate with the new content
 			}
 		}
+		if why := d.protoBlock(); why != "" {
+			if st.SyncError != why {
+				d.event("error", "configuration sync refused: %s", why)
+				d.store.Update(func(s *State) { s.SyncError = why })
+			}
+			continue
+		}
 		// after a failure, retry the same content only every 5 s
 		if st.SyncError != "" && sha == d.sync.lastSHA && time.Since(d.sync.lastTry) < 5*time.Second {
 			continue
@@ -103,6 +110,8 @@ func (d *Daemon) pushConfig(b []byte, sha string) error {
 	cl.Timeout = 12 * time.Minute // the standby may have to install plugins first
 	req, _ := http.NewRequest(http.MethodPost, "https://"+net.JoinHostPort(st.PeerAddr, fmt.Sprint(st.PeerPort))+"/v1/config", &z)
 	req.Header.Set("X-Rev", strconv.FormatUint(rev, 10))
+	req.Header.Set("X-Proto", strconv.Itoa(protoVersion))
+	req.Header.Set("X-Epoch", strconv.FormatUint(st.Epoch, 10))
 	req.Header.Set("X-SHA256", sha)
 	req.Header.Set("X-Packages", encodePackages(collectInfo().Packages))
 	resp, err := cl.Do(req)
@@ -132,22 +141,6 @@ func (d *Daemon) pushConfig(b []byte, sha string) error {
 
 var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// checkConfigPush validates the headers of a configuration push before anything is read or applied: the revision and the checksum
-// are required and strictly parsed. There is deliberately no comparison of leadership epochs here: the receiver only accepts a push
-// while it is itself standby (checked again under the operations lock when the configuration is applied), which in a pair of two nodes
-// means that the sender is the active one; a deposed or delayed active node pushing to the node that took over gets a 409. Revisions
-// are counted per sender, so they are not comparable across a change of leader either. code 0 = valid.
-func checkConfigPush(h http.Header) (rev uint64, code int, msg string) {
-	rev, err := strconv.ParseUint(h.Get("X-Rev"), 10, 64)
-	if err != nil || rev == 0 {
-		return 0, http.StatusBadRequest, "missing or malformed revision"
-	}
-	if !sha256Re.MatchString(h.Get("X-SHA256")) {
-		return 0, http.StatusBadRequest, "missing or malformed checksum"
-	}
-	return rev, 0, ""
-}
-
 // handleConfig runs on the standby.
 func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 	st := d.store.Get()
@@ -155,7 +148,7 @@ func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this node is not standby", http.StatusConflict)
 		return
 	}
-	rev, code, msg := checkConfigPush(r.Header)
+	rev, epoch, code, msg := checkConfigPush(r.Header, st.LeaderEpoch)
 	if code != 0 {
 		d.event("warning", "refused a configuration push: %s", msg)
 		http.Error(w, msg, code)
@@ -166,6 +159,7 @@ func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 	// is acknowledged as a no-op (unless drift was detected, then it is applied again), anything else is applied.
 	if sha := r.Header.Get("X-SHA256"); sha != "" && sha == st.AppliedSHA && !d.driftDetected() && activeValid(d.store.dir) {
 		d.store.Update(func(s *State) {
+			s.LeaderEpoch = max(s.LeaderEpoch, epoch)
 			if rev > s.SyncRev {
 				s.SyncRev = rev
 			}
@@ -201,6 +195,7 @@ func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("sync: revision %d applied (%s)", rev, r.Header.Get("X-SHA256")[:12])
 	d.store.Update(func(s *State) {
+		s.LeaderEpoch = max(s.LeaderEpoch, epoch)
 		if rev > s.SyncRev {
 			s.SyncRev = rev
 		}
@@ -230,15 +225,25 @@ func (d *Daemon) applyConfig(xml []byte) error {
 		return fmt.Errorf("snapshot: %w", err)
 	}
 	rollback := func(cause error) error {
+		// a restore that fails is part of the answer: the standby is then NOT back on its previous good configuration
+		var failed []string
 		if hadFull {
-			copyFile(prevFull, full, 0o600)
+			if err := copyFile(prevFull, full, 0o600); err != nil {
+				failed = append(failed, "the saved active configuration: "+err.Error())
+			}
 		}
 		unlockConfig()
-		copyFile(prevCfg, configPath(), 0o640)
+		if err := copyFile(prevCfg, configPath(), 0o640); err != nil {
+			failed = append(failed, "config.xml: "+err.Error())
+		}
 		lockConfig()
 		d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 		d.filterReloadLocal()
 		d.enforceOnce()
+		if len(failed) > 0 {
+			d.event("error", "rollback of a configuration that could not be applied FAILED (%s): this standby may not hold its previous good configuration", strings.Join(failed, "; "))
+			return fmt.Errorf("%w (the rollback itself failed: %s)", cause, strings.Join(failed, "; "))
+		}
 		return fmt.Errorf("%w (rolled back to the previous good configuration)", cause)
 	}
 

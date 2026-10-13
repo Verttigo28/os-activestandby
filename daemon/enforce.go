@@ -49,7 +49,21 @@ func (d *Daemon) enforceOnce() {
 		}
 		set, err := d.ops.ifaces(activeXML(d.store.dir))
 		if err != nil {
-			return
+			// A standby that cannot read its saved configuration must still keep its data devices silent: the standby view in
+			// config.xml lists the same devices (the boot guard falls back to it the same way). Only if that fails too is nothing enforced,
+			// and that is reported, not hidden.
+			var err2 error
+			if set, err2 = d.ops.ifaces(configPath()); err2 != nil {
+				if time.Since(d.ops.enforceErrAt) > 10*time.Minute {
+					d.ops.enforceErrAt = time.Now()
+					d.event("error", "the standby cannot read its interface list (%v; and %v): its data devices are NOT being kept down", err, err2)
+				}
+				return
+			}
+			if time.Since(d.ops.enforceErrAt) > 10*time.Minute {
+				d.ops.enforceErrAt = time.Now()
+				d.event("warning", "the standby cannot read its saved configuration (%v): keeping its devices down from the configuration in use", err)
+			}
 		}
 		warm := d.warmSet(activeXML(d.store.dir), set)
 		up, _ := d.run("ifconfig", "-l", "-u")
