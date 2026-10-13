@@ -13,6 +13,7 @@
   "notify_level": {{ g.notify_level|default("warning")|tojson }},
   "notify_webhook": {{ g.notify_webhook|default("")|tojson }},
   "fence_command": {{ g.fence_command|default("")|tojson }},
+  "fence_required": {{ "true" if g.fence_required|default("0") == "1" else "false" }},
   "preempt": {{ "true" if g.preempt|default("0") == "1" else "false" }},
   "preempt_delay": {{ g.preempt_delay|default("300")|int }},
   "monitor_interfaces": {{ g.monitor_interfaces|default("")|tojson }},

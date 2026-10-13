@@ -199,6 +199,15 @@ func (d *Daemon) autoStep() {
 // autoPromote promotes this node. With fence set (the peer went silent) the configured fencing command must
 // succeed first, otherwise the promotion is cancelled: a silent peer may still be alive.
 func (d *Daemon) autoPromote(reason string, fence bool) {
+	// policy: no takeover on the strength of a silence alone when nothing can switch the peer off (see the setting "fence_required")
+	if fence && d.cfg.FenceRequired && d.cfg.FenceCommand == "" {
+		const why = "the peer is silent, but fencing is required (Settings > Safety) and no fencing command is configured: not taking over by itself. Promote manually once the peer is known to be off."
+		if d.auto.Blocked() == "" {
+			d.event("error", "automatic takeover refused: %s", why)
+		}
+		d.auto.setBlocked(why)
+		return
+	}
 	d.auto.lastChange = time.Now()
 	d.auto.noActiveSince = time.Time{}
 	d.auto.setBlocked("")

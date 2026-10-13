@@ -130,6 +130,24 @@ func (d *Daemon) pushConfig(b []byte, sha string) error {
 	})
 }
 
+var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// checkConfigPush validates the headers of a configuration push before anything is read or applied: the revision and the checksum
+// are required and strictly parsed. There is deliberately no comparison of leadership epochs here: the receiver only accepts a push
+// while it is itself standby (checked again under the operations lock when the configuration is applied), which in a pair of two nodes
+// means that the sender is the active one; a deposed or delayed active node pushing to the node that took over gets a 409. Revisions
+// are counted per sender, so they are not comparable across a change of leader either. code 0 = valid.
+func checkConfigPush(h http.Header) (rev uint64, code int, msg string) {
+	rev, err := strconv.ParseUint(h.Get("X-Rev"), 10, 64)
+	if err != nil || rev == 0 {
+		return 0, http.StatusBadRequest, "missing or malformed revision"
+	}
+	if !sha256Re.MatchString(h.Get("X-SHA256")) {
+		return 0, http.StatusBadRequest, "missing or malformed checksum"
+	}
+	return rev, 0, ""
+}
+
 // handleConfig runs on the standby.
 func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 	st := d.store.Get()
@@ -137,7 +155,12 @@ func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this node is not standby", http.StatusConflict)
 		return
 	}
-	rev, _ := strconv.ParseUint(r.Header.Get("X-Rev"), 10, 64)
+	rev, code, msg := checkConfigPush(r.Header)
+	if code != 0 {
+		d.event("warning", "refused a configuration push: %s", msg)
+		http.Error(w, msg, code)
+		return
+	}
 	// Only the active node pushes, one revision at a time, so ordering is not a safety issue. A revision number we already
 	// have must never wedge the sync (e.g. the ack of a push got lost when a daemon restarted): content we already applied
 	// is acknowledged as a no-op (unless drift was detected, then it is applied again), anything else is applied.

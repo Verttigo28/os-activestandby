@@ -45,14 +45,14 @@ What was tested, how, and what still needs hardware. **PASS** = verified in the 
 | 26 | Pairing refuses non-identical nodes; token + pinned certificates | PASS | Version/NIC/plugin mismatch refused (extra NIC test); wrong token rejected; stranger certificate rejected; Go unit tests. |
 | 27 | Status page, event log, dashboard widget | PASS | GUI and widget verified in Chrome (widget added to the dashboard and persisted). |
 | 28 | Built-in CARP/XMLRPC HA menu hidden while enabled | PASS | Menu entry removed; pages remain reachable by URL (accepted). |
-| 29 | Documented update and recovery procedures | PASS | docs/OPERATIONS.md, docs/BUILD.md (unlock, update standby first, break pair). |
+| 29 | Documented update and recovery procedures | PASS | docs/operations.md, docs/building.md (unlock, update standby first, break pair). |
 
 ## E. Not verifiable here
 | # | Item | Status |
 |---|---|---|
 | 30 | Intel X710 (ixl): carrier on admin-down, LLDP, real boot window | **HW** (`lab/hw-probe.sh`) |
 | 31 | Gratuitous ARP effect on a real switch MAC table | **HW** |
-| 32 | Package build with the OPNsense plugins framework | open (layout follows net/haproxy, see docs/BUILD.md) |
+| 32 | Package build with the OPNsense plugins framework | open (layout follows net/haproxy, see docs/building.md) |
 | 33 | Bridge/GRE/GIF devices, LACP LAGG with a real partner, non-OPNsense VPN peers | not tested |
 | 34 | IPv6 | N/A |
 

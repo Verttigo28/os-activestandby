@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2034 # the scripts that source this file use these variables
 # Sandbox helpers (FreeBSD, run as root). Two cluster nodes (vnet jails hasynA, hasynB) and a client (hasynC) on three
 # bridges that play the switches: data (swD), HA link (swH) and management (swM). The jails share the host file system but have
 # their own network stack, so the real interfaces of the machine are not visible to them; the daemons run against stub scripts
@@ -79,7 +80,6 @@ summary() { echo; echo "RESULT: $PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]; 
 monitor_start() {
 	rm -f "$SBX/monitor.log" "$SBX/monitor.stop"
 	(
-		prev=0
 		while [ ! -f "$SBX/monitor.stop" ]; do
 			a=0; b=0
 			owns A && a=1

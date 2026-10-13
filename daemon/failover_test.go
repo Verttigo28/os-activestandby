@@ -315,7 +315,7 @@ func TestPromoteRequestIsIdempotentPerTransition(t *testing.T) {
 	var fb fakeSystem
 	fb.install(b)
 	tid := newTID()
-	path := "/v1/promote?tid=" + tid + "&epoch=7"
+	path := promoteURL(tid, 7)
 	if _, err := deliver(b, path); err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestStaleEpochPromoteIsRefused(t *testing.T) {
 	b := newHANode(t, standbyState(RoleStandby, 9))
 	var fb fakeSystem
 	fb.install(b)
-	if _, err := deliver(b, "/v1/promote?tid="+newTID()+"&epoch=7"); err == nil {
+	if _, err := deliver(b, promoteURL(newTID(), 7)); err == nil {
 		t.Fatal("a command from an older leadership generation was obeyed")
 	}
 	if fb.promotes.Load() != 0 {
@@ -364,7 +364,7 @@ func TestConcurrentPromoteOfTheSameTransitionRunsOnce(t *testing.T) {
 		<-release
 		return b.store.Update(func(s *State) { s.State = StateActive; s.Epoch++ })
 	}
-	path := "/v1/promote?tid=" + newTID() + "&epoch=7"
+	path := promoteURL(newTID(), 7)
 	first := make(chan error, 1)
 	go func() { _, err := deliver(b, path); first <- err }()
 	<-started
@@ -390,7 +390,7 @@ func TestAbortAfterCompletionReportsDoneAndRole(t *testing.T) {
 	var fb fakeSystem
 	fb.install(b)
 	tid := newTID()
-	deliver(b, "/v1/promote?tid="+tid+"&epoch=7")
+	deliver(b, promoteURL(tid, 7))
 	out, err := deliver(b, "/v1/abort?tid="+tid)
 	if err != nil || out["tx"] != txDone || out["state"] != StateActive {
 		t.Fatalf("%v %v", out, err)
@@ -775,16 +775,92 @@ func TestExpiredPromoteRequestIsRefused(t *testing.T) {
 	if fb.promotes.Load() != 0 || b.store.Get().State != StateStandby {
 		t.Fatal("the late request promoted the node")
 	}
-	// within the allowed clock difference it is still valid, and a request without validity (older peers) keeps working
+	// within the allowed clock difference it is still valid
 	edge := time.Now().Add(-reqSkew / 2).UnixMilli()
 	if _, err := deliver(b, fmt.Sprintf("/v1/promote?tid=%s&epoch=7&exp=%d", newTID(), edge)); err != nil {
 		t.Fatalf("a request just past its time but within the skew must be accepted: %v", err)
 	}
-	b2 := newHANode(t, standbyState(RoleStandby, 6))
-	var fb2 fakeSystem
-	fb2.install(b2)
-	if _, err := deliver(b2, "/v1/promote?tid="+newTID()+"&epoch=7"); err != nil {
-		t.Fatal(err)
+}
+
+// promoteURL is a well-formed promote request: the transition id, the epoch of the sender and an expiry reqTTL from now.
+func promoteURL(tid string, epoch uint64) string {
+	return fmt.Sprintf("/v1/promote?tid=%s&epoch=%d&exp=%d", tid, epoch, time.Now().Add(reqTTL).UnixMilli())
+}
+
+// Every parameter of /v1/promote is required and strictly parsed. Nothing malformed may promote the node, and none may be
+// remembered as a transition (it must not use up an id or hide a later valid request).
+func TestPromoteRefusesMissingOrMalformedParameters(t *testing.T) {
+	good := newTID()
+	exp := time.Now().Add(reqTTL).UnixMilli()
+	far := time.Now().Add(reqTTL + reqSkew + time.Hour).UnixMilli()
+	for name, q := range map[string]string{
+		"no parameter":          "",
+		"tid absent":            fmt.Sprintf("epoch=7&exp=%d", exp),
+		"tid empty":             fmt.Sprintf("tid=&epoch=7&exp=%d", exp),
+		"tid uppercase":         fmt.Sprintf("tid=%s&epoch=7&exp=%d", strings.ToUpper(good), exp),
+		"tid too short":         fmt.Sprintf("tid=abcd&epoch=7&exp=%d", exp),
+		"tid with a path":       fmt.Sprintf("tid=../../etc&epoch=7&exp=%d", exp),
+		"epoch absent":          fmt.Sprintf("tid=%s&exp=%d", good, exp),
+		"epoch empty":           fmt.Sprintf("tid=%s&epoch=&exp=%d", good, exp),
+		"epoch not a number":    fmt.Sprintf("tid=%s&epoch=seven&exp=%d", good, exp),
+		"epoch negative":        fmt.Sprintf("tid=%s&epoch=-1&exp=%d", good, exp),
+		"epoch with a fraction": fmt.Sprintf("tid=%s&epoch=7.5&exp=%d", good, exp),
+		"epoch far ahead":       fmt.Sprintf("tid=%s&epoch=99999&exp=%d", good, exp),
+		"exp absent":            fmt.Sprintf("tid=%s&epoch=7", good),
+		"exp empty":             fmt.Sprintf("tid=%s&epoch=7&exp=", good),
+		"exp not a number":      fmt.Sprintf("tid=%s&epoch=7&exp=tomorrow", good),
+		"exp zero":              fmt.Sprintf("tid=%s&epoch=7&exp=0", good),
+		"exp negative":          fmt.Sprintf("tid=%s&epoch=7&exp=-5", good),
+		"exp far in the future": fmt.Sprintf("tid=%s&epoch=7&exp=%d", good, far),
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newHANode(t, standbyState(RoleStandby, 6))
+			var fb fakeSystem
+			fb.install(b)
+			if _, err := deliver(b, "/v1/promote?"+q); err == nil {
+				t.Fatal("accepted")
+			}
+			if fb.promotes.Load() != 0 || b.store.Get().State != StateStandby {
+				t.Fatal("the node was promoted by a malformed request")
+			}
+			if len(b.tx.m) != 0 {
+				t.Fatalf("a refused request was recorded as a transition: %v", b.tx.m)
+			}
+			// and a valid request with the same id still works afterwards
+			if _, err := deliver(b, promoteURL(good, 7)); err != nil {
+				t.Fatalf("a valid request was refused after a malformed one: %v", err)
+			}
+		})
+	}
+}
+
+// the epoch of the sender may be equal to ours or ahead (we are behind on heartbeats), never behind
+func TestPromoteAcceptsEqualAndAheadEpochs(t *testing.T) {
+	for _, e := range []uint64{6, 7, 6 + maxEpochAhead} {
+		b := newHANode(t, standbyState(RoleStandby, 6))
+		var fb fakeSystem
+		fb.install(b)
+		if _, err := deliver(b, promoteURL(newTID(), e)); err != nil {
+			t.Fatalf("epoch %d: %v", e, err)
+		}
+	}
+}
+
+// a transition whose log entry was trimmed out (more than txKeep newer ones) cannot be replayed: its request expired long ago
+func TestReplayAfterTheLogWasTrimmedIsRefusedByItsExpiry(t *testing.T) {
+	b := newHANode(t, standbyState(RoleStandby, 6))
+	var fb fakeSystem
+	fb.install(b)
+	tid := newTID()
+	old := fmt.Sprintf("/v1/promote?tid=%s&epoch=7&exp=%d", tid, time.Now().Add(-time.Minute).UnixMilli())
+	for i := 0; i < txKeep+5; i++ {
+		b.tx.begin(newTID())
+	}
+	if _, err := deliver(b, old); err == nil {
+		t.Fatal("an old request was executed after its record was trimmed")
+	}
+	if fb.promotes.Load() != 0 {
+		t.Fatal("promoted")
 	}
 }
 

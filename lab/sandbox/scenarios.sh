@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2154 # hap, map, ... are assigned by an eval
 # Scenarios against the two real daemons of the sandbox. Usage: sh scenarios.sh classic|warm [only-section-number...]
 # The sandbox is rebuilt first. PASS/FAIL per check, a double-active detector runs over the whole time.
 . "$(dirname "$0")/lib.sh"
@@ -346,6 +347,7 @@ sby=$(other $act)
 wait_for 20 "healthy" '[ "$(st '$act' state)" = active ] && [ "$(st '$sby' state)" = standby ] && [ "$(st '$act' peer_alive)" = true ]'
 sleep 3
 monitor_clear
+# shellcheck disable=SC2034 # used by the check below, which is evaluated later
 pr0=$(events $sby | grep -o "ACTIVE (peer request" | wc -l)
 jx $sby pkill -STOP -f "hasyncd daemon"
 ( ctl $act failover > "$SBX/fo.out" 2>&1 ) &

@@ -107,3 +107,25 @@ An independent reviewer read all changes (hot standby, ruleset mirror, native VL
 | `hot.go` | The safety checks failed open on an unreadable `pfctl` or `netstat`. | Fail closed. |
 | nits | device names of parents and LAGG members not validated; link hold could exceed the configured hold | validated; `min(hold, ...)` |
 Not changed, documented: the MTU set at a takeover is not restored at stand-down; `promisc` stays on a former parent; the enforcer takes the operations lock every second (a promotion may wait for one pass).
+
+## Seventh round (1.0.2): gap analysis against the audit brief
+
+The brief in `todo/version-1.x.md` was compared with the code, the tests, the CI and the documentation one section at a time (by a reader who did not write the code, then each finding checked again before it was acted on). What was found and what was done:
+
+| Section | Finding | Result |
+|---|---|---|
+| 3 persistence | The role was changed in memory before it was saved; no test could make the disk fail | transactional update with a defined commit point, `UpdateSafe` for what already happened, deep copy, validation at save and at load; fault-injection tests for a full disk, EIO, fsync, rename, directory sync, crashes between the steps, torn and invalid files, concurrent updates ([security](security.md#review-of-101-to-102-persistence-promote-request-fencing-policy)) |
+| 4 promotion | A failed save after the takeover left the node active with an error returned to the peer | the takeover is committed with `UpdateSafe`; a failed save marks the node degraded and the answer stays "promoted" |
+| 6 `/v1/promote` | `tid`, `epoch`, `exp` optional, parse errors ignored | required and strict; table test of 18 malformed requests, bounds on epoch and validity, replay after the log was trimmed |
+| 7 `/v1/config` | headers not checked; "a deposed active node can overwrite" | headers checked; the second claim was wrong (a push is accepted only by a standby), documented; no epoch comparison on purpose (it could stop the sync after a re-pairing) |
+| 5 split-brain | the invariant was asserted in a few places only; no policy without fencing | seeded property test of the role protocol (failovers with lost requests/answers, restarts, a manual promotion of the standby, nobody active) with the invariants "at most one active" and "epoch never decreases", mutation-checked; losses of 10/30/50 %, duplicates and late delivery; new option `fence_required`; fencing policy table test |
+| 10 services | a service that failed to start was only logged | checked after the start; failure marks the node degraded |
+| 14 tests | no test of the configuration push | header and refusal tests |
+| 17 CI | ShellCheck did not fail the build and covered four scripts; no vulnerability check | ShellCheck on every script (15 findings fixed or justified), `govulncheck`, `go mod verify`, reproducible-build check, package smoke test, attestation and checksum of the daemon binary |
+| 19 documentation | old repository name in the install and verification commands; stale file names; build section out of date | corrected; certificate rotation and pfsync exposure documented; the limit without fencing stated at the top of the README |
+
+Not done, and why:
+- **A protocol version in the heartbeat** that blocks operations between versions: the mismatch of plugin versions is reported (pre-flight and events), but nothing refuses an operation. No wire change is pending that would need it; it comes with the first incompatible one.
+- **Latency simulation (500 ms, 2 s) in the unit tests**: the tests use losses, duplicates and late delivery with a seeded generator, not delays (they would need a simulated clock in the transition code). Delays and a frozen peer were measured on the lab and in the sandbox.
+- **`bootStandby` and the enforcer** are not covered by a Go test (they act on real interfaces); the sandbox and the hardware runs cover them.
+- Not run on this machine: `staticcheck` and `govulncheck` (programs cannot be started here); both run in the CI.

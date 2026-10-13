@@ -73,7 +73,8 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) error {
 	d.sess.trackExisting(sessionDir)
 	d.degraded.Store("")
 	d.event("change", "demoted to STANDBY (%s)", reason)
-	err = d.store.Update(func(s *State) { s.State = StateStandby })
+	// the data interfaces are down already: the memory must say standby even if the disk refuses (the failure is returned and logged)
+	err = d.store.UpdateSafe(func(s *State) { s.State = StateStandby })
 	d.hist.add(HistoryEntry{Type: "demote", Reason: reason, DurationMs: time.Since(t0).Milliseconds(), Epoch: d.store.Get().Epoch})
 	d.recordIntegrity()
 	return err

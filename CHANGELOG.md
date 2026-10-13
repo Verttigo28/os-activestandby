@@ -2,6 +2,18 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 1.0.2
+### Fixed and hardened (an independent comparison with the audit brief, see [audit](docs/audit.md#seventh-round-102-gap-analysis-against-the-audit-brief))
+- **Role file.** The role is now changed on a copy, checked and saved, and only then published; a failed write (disk full, I/O error, fsync, rename) leaves memory and disk unchanged and returns the error. A node that goes down or takes over follows the machine even if the disk refuses (`UpdateSafe`): the failure is logged and the node is shown as degraded. A state file that is valid JSON but not a state (`{}`, `null`, unknown role) counts as damaged. `Get` returns a deep copy.
+- **`/v1/promote`**: `tid`, `epoch` and `exp` are required and strictly parsed; implausible epochs and validities are refused; the promote reason now carries the transition id and the epoch.
+- **`/v1/config`**: revision and checksum headers are required and strictly parsed.
+- **Services after a takeover** are verified; a failure marks the node degraded.
+- **New option `fence_required`** (Settings > Safety, off by default): no automatic takeover caused by a silent peer without a fencing command that succeeds.
+- **CI**: ShellCheck is blocking and covers every script (all findings fixed or justified); `govulncheck`, `go mod verify`, a reproducible-build check, a package smoke test, attestation and checksum of the daemon binary.
+- **Documentation**: repository name in the install and verification commands, file names, build section, certificate rotation, pfsync exposure, the limit without fencing at the top of the README.
+### Tests
+- Fault injection for the role file, a table test of malformed promote requests, header tests for the configuration push, a fencing policy table, a seeded property test of the role protocol (at most one active node, epochs never decrease), packet loss of 10/30/50 % with duplicates and late delivery.
+
 ## 1.0.1
 ### Fixed
 - **Plugin services were not started on the node that becomes active.** Only NTP, captive portal, Suricata, HAProxy and Dynamic DNS were restarted after a takeover. A service that is enabled in the replicated configuration but was never started on the standby (net-snmp, node exporter, LLDP, ...) stayed stopped on the new active node: found on the test pair after replicating the settings of a pfSense, where none of the three ran after the first failover. After a takeover every service listed by `pluginctl -S` that is enabled and not running is now started (IPsec, OpenVPN, WireGuard, the gateway monitor, DHCP and DNS keep their own handling). The standby had not always regenerated the templates of the plugins either (`/etc/rc.conf.d/snmpd` still said `NO`, so starting the service did nothing): they are regenerated first. Not present in 1.0.0.

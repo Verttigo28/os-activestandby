@@ -59,6 +59,9 @@ func validateFenceCommand(path string) error {
 }
 
 func (d *Daemon) runFence() error {
+	if d.act != nil && d.act.fence != nil {
+		return d.act.fence()
+	}
 	cmdPath := d.cfg.FenceCommand
 	if cmdPath == "" {
 		return nil

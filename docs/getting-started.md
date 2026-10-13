@@ -12,13 +12,13 @@
 On both machines:
 
 ```sh
-fetch https://github.com/Verttigo28/opn-betterHA/releases/download/v<version>/os-activestandby-<version>.pkg
-fetch https://github.com/Verttigo28/opn-betterHA/releases/download/v<version>/SHA256SUMS
+fetch https://github.com/Verttigo28/os-activestandby/releases/download/v<version>/os-activestandby-<version>.pkg
+fetch https://github.com/Verttigo28/os-activestandby/releases/download/v<version>/SHA256SUMS
 grep os-activestandby SHA256SUMS      # compare with: sha256 os-activestandby-<version>.pkg
 pkg add os-activestandby-<version>.pkg
 ```
 
-Verify the download: compare the checksum, or better `gh attestation verify os-activestandby-<version>.pkg --repo Verttigo28/opn-betterHA`. With the signed pkg repository set up (see [building](building.md#signing)) `pkg install` checks the signature itself. Reload the GUI: the page is under **System > Active/Standby HA** and the built-in High Availability menu is hidden.
+Verify the download: compare the checksum, or better `gh attestation verify os-activestandby-<version>.pkg --repo Verttigo28/os-activestandby`. With the signed pkg repository set up (see [building](building.md#signing)) `pkg install` checks the signature itself. Reload the GUI: the page is under **System > Active/Standby HA** and the built-in High Availability menu is hidden.
 
 ## Set up the pair
 

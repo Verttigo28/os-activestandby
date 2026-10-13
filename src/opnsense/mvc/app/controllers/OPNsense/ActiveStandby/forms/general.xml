@@ -160,6 +160,14 @@
     </field>
 
     <field>
+        <id>activestandby.general.fence_required</id>
+        <label>Never take over by itself without fencing</label>
+        <type>checkbox</type>
+        <advanced>true</advanced>
+        <help>Without a way to switch the other firewall off, a standby that no longer hears it cannot tell a dead peer from a broken link between them, and takes over after the detection time. With this on, the standby refuses an automatic takeover caused by a silent peer unless a fencing command is configured (and succeeds). A deliberate failover and a takeover when the peer says it is standby are not affected. Safer, but a real crash of the active firewall then needs a manual takeover when no fencing exists.</help>
+    </field>
+
+    <field>
         <type>header</type>
         <label>Notifications</label>
     </field>

@@ -61,30 +61,59 @@ func devNameLike(n string) bool {
 	return !strings.HasPrefix(n, "-")
 }
 
-// startStoppedServices starts, after a takeover, the services that are enabled but not running. It returns the names it started.
-func (d *Daemon) startStoppedServices() []string {
+// startStoppedServices starts, after a takeover, the services that are enabled but not running, then checks that they are running:
+// a start command that returned is not a service that works. It returns the services that are running now and the ones that are not.
+func (d *Daemon) startStoppedServices() (started, failed []string) {
 	out, err := sh("pluginctl", "-S")
 	if err != nil {
 		log.Printf("  services after the takeover: pluginctl -S: %v", err)
-		return nil
+		return nil, nil
 	}
 	stopped := stoppedServices(out)
 	if len(stopped) == 0 {
-		return nil
+		return nil, nil
 	}
 	d.reloadPluginTemplates()
-	var started []string
 	for _, name := range stopped {
 		if o, err := sh("pluginctl", "-s", name, "start"); err != nil {
 			log.Printf("  start %s after takeover: %v: %s", name, err, strings.TrimSpace(o))
-			continue
 		}
-		started = append(started, name)
+	}
+	after, _ := sh("pluginctl", "-S")
+	failed = stillStopped(stopped, after)
+	for _, name := range stopped {
+		if !contains(failed, name) {
+			started = append(started, name)
+		}
 	}
 	if len(started) > 0 {
 		d.event("info", "services that were enabled but not running were started after the takeover: %s", strings.Join(started, ", "))
 	}
-	return started
+	if len(failed) > 0 {
+		d.event("error", "services that are enabled but could not be started after the takeover: %s", strings.Join(failed, ", "))
+	}
+	return started, failed
+}
+
+// stillStopped returns the services of want that pluginctl -S still reports as not running (all of them if it cannot be read).
+func stillStopped(want []string, pluginctl string) []string {
+	var all []serviceEntry
+	if json.Unmarshal([]byte(pluginctl), &all) != nil {
+		return want
+	}
+	var out []string
+	for _, w := range want {
+		running := false
+		for _, s := range all {
+			if s.Name == w && !strings.Contains(strings.ToLower(string(s.Status)), "not running") {
+				running = true
+			}
+		}
+		if !running {
+			out = append(out, w)
+		}
+	}
+	return out
 }
 
 // The files that tell rc.d whether a plugin service is enabled (/etc/rc.conf.d/snmpd, ...) are generated from templates, and a

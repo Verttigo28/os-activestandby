@@ -22,7 +22,7 @@ Go unit tests (pairing protocol, no VM needed): `cd daemon; go test ./...`
 
 ## Third VM and IPsec test
 `lab/tools/new-peer.ps1` installs `opn-peer` (hn0 LAN 192.168.50.1 on ha-lan, hn1 WAN 10.0.0.99 on ha-wan, hn2 MGMT). After basic setup over the console,
-`. .\ipsec-lab.ps1; Add-LabTunnel ...` creates the tunnel on the active node (replicates to the standby) and on the peer; see docs/OPERATIONS.md for results.
+`. .\ipsec-lab.ps1; Add-LabTunnel ...` creates the tunnel on the active node (replicates to the standby) and on the peer; see docs/operations.md for results.
 
 The root password of the lab VMs is read from `lab/.lab-password` (untracked) or the `OPN_LAB_PW` environment variable.
 

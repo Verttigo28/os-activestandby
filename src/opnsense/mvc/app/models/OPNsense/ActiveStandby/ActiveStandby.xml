@@ -113,6 +113,10 @@
                 <Mask>/^(\/[A-Za-z0-9_.\/-]{1,200})?$/D</Mask>
                 <ValidationMessage>Enter an absolute path without spaces.</ValidationMessage>
             </fence_command>
+            <fence_required type="BooleanField">
+                <Default>0</Default>
+                <Required>Y</Required>
+            </fence_required>
             <notify_level type="OptionField">
                 <Default>warning</Default>
                 <Required>Y</Required>

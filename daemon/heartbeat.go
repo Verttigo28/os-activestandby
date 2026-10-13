@@ -308,7 +308,7 @@ func (d *Daemon) failover(force bool) (string, error) {
 	}
 	// from here on our data interfaces are down: whatever the cleanup said, we are not serving
 	if derr != nil {
-		d.store.Update(func(s *State) { s.State = StateStandby })
+		d.store.UpdateSafe(func(s *State) { s.State = StateStandby })
 	}
 	if perr == nil {
 		if derr != nil {

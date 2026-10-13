@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -255,12 +256,35 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		t1 := time.Now()
 		out, err := sh(reconfScript, "dns")
 		log.Printf("  dhcp+dns restart: %dms err=%v out=%q", time.Since(t1).Milliseconds(), err, out)
-		restartBoundServices()
-		d.startStoppedServices()
+		var bad []string
+		if err != nil {
+			bad = append(bad, "DHCP and DNS restart")
+		}
+		bad = append(bad, restartBoundServices()...)
+		_, failed := d.startStoppedServices()
+		bad = append(bad, failed...)
+		// a node that is already standby again (a quick hand-back) has nothing to report
+		if len(bad) > 0 && d.store.Get().State == StateActive {
+			d.markDegraded("services that did not start after the takeover: %s", strings.Join(bad, ", "))
+		}
 	}()
 	ph.mark("pf reloaded, services started")
 	d.event("change", "promoted to ACTIVE (%s) in %d ms", reason, time.Since(t0).Milliseconds())
-	err = d.store.Update(func(s *State) {
+	d.commitActive()
+	d.hist.add(HistoryEntry{Type: "promote", Reason: reason, DurationMs: time.Since(t0).Milliseconds(), Epoch: d.store.Get().Epoch, Phases: ph.list(), DetectMs: d.auto.detectMs.Swap(0)})
+	d.leases.reset()
+	d.drift.reason.Store("")
+	d.health.startGrace()
+	ph.mark("ACTIVE")
+	return nil
+}
+
+// commitActive is the commit point of a takeover. The interfaces, the ruleset and the services are up already, so this node IS
+// serving: the memory must say so even if the disk refuses (UpdateSafe publishes it). The failure is then loud: the node is marked
+// degraded, and after a restart it would read its old file and boot as a silent standby, which is the safe direction. Returning an
+// error here instead would tell the peer that the promotion failed while this node forwards traffic.
+func (d *Daemon) commitActive() {
+	err := d.store.UpdateSafe(func(s *State) {
 		_, _, pe := d.hb.Snapshot()
 		if pe.Epoch > s.Epoch {
 			s.Epoch = pe.Epoch
@@ -269,12 +293,9 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		s.Epoch++
 		s.AckedSHA = "" // the new active node pushes its full config to the new standby, so both sides converge
 	})
-	d.hist.add(HistoryEntry{Type: "promote", Reason: reason, DurationMs: time.Since(t0).Milliseconds(), Epoch: d.store.Get().Epoch, Phases: ph.list(), DetectMs: d.auto.detectMs.Swap(0)})
-	d.leases.reset()
-	d.drift.reason.Store("")
-	d.health.startGrace()
-	ph.mark("ACTIVE")
-	return err
+	if err != nil {
+		d.markDegraded("the new role could not be saved to disk (%v): a restart would boot this node as standby", err)
+	}
 }
 
 // boundServices are services that bind to interface addresses and do not notice that the addresses came back. When one
@@ -288,13 +309,17 @@ var boundServices = map[string][]string{
 	"ddclient":      {"configctl", "ddclient", "restart"},
 }
 
-func restartBoundServices() {
+// restartBoundServices returns the services whose restart failed.
+func restartBoundServices() (failed []string) {
 	svc, _ := sh("pluginctl", "-S")
 	for name, cmd := range boundServices {
 		if strings.Contains(svc, `"name": "`+name+`"`) {
 			if out, err := sh(cmd[0], cmd[1:]...); err != nil {
 				log.Printf("  restart %s after takeover: %v: %s", name, err, out)
+				failed = append(failed, name)
 			}
 		}
 	}
+	sort.Strings(failed)
+	return failed
 }

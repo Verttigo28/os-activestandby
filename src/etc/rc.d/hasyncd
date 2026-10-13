@@ -4,6 +4,7 @@
 # REQUIRE: NETWORKING
 # KEYWORD: shutdown
 
+# shellcheck disable=SC2034 # rc.subr reads these variables
 . /etc/rc.subr
 
 name=hasyncd

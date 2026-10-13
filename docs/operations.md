@@ -75,6 +75,7 @@ Settings tab (some under *advanced*):
 - **Management probe targets**: optional addresses (the management switch or router) that both nodes ping from their management address. They give the standby, whose data interfaces are down, proof that its own network side is alive: a standby that cannot reach them does not take over, and an active node does not hand over for a health problem when the standby cannot either. Use addresses that answer ping.
 - **Failure detection time**: lower is faster and riskier on a flaky link. Same value on both nodes.
 - **Fencing command**: a root-owned absolute path run before an automatic promotion when the peer went silent. Failure blocks the promotion.
+- **Never take over by itself without fencing** (off by default): the standby refuses an automatic takeover caused by a silent peer unless a fencing command is configured and succeeds. Use it where a double active node is worse than a longer outage; a real crash of the active firewall then needs a manual takeover when no fencing exists. A deliberate failover is not affected.
 - **GUI logins across a failover** and **virtual MAC** are on by default.
 
 ### Which failures cause a failover

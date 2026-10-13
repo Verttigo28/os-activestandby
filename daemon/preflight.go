@@ -67,6 +67,9 @@ func (d *Daemon) localChecks() []Check {
 	if st.PeerFP == "" {
 		return []Check{fail("pairing", "this node is not paired")}
 	}
+	if d.cfg.FenceRequired && d.cfg.FenceCommand == "" {
+		cs = append(cs, warn("fencing", "fencing is required for an automatic takeover but no fencing command is configured: if the active firewall fails, this one will not take over by itself"))
+	}
 	if d.mgmtAddr() == "" && !d.cfg.AllowHAOnly {
 		cs = append(cs, warn("management path", "no management interface: after a power loss of the other firewall this one cannot prove it is not the isolated node and will not take over by itself (add a management interface, or allow it under Settings > Safety)"))
 	}

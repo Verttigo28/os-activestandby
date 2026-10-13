@@ -32,6 +32,9 @@ const (
 	txAborted = "aborted"
 
 	txKeep = 64 // transitions remembered
+
+	// the epochs of the two nodes differ by a handful; a request that is further ahead than this is not from the peer
+	maxEpochAhead = 1000
 )
 
 var tidRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -120,49 +123,68 @@ func (t *txLog) abort(tid string) string {
 
 // handlePromote: the active peer asks us (standby) to take over after it demoted itself.
 func (d *Daemon) handlePromote(w http.ResponseWriter, r *http.Request) {
+	// All three parameters are required and strictly parsed: a request without a transition id has no replay protection, one without an
+	// epoch or an expiry cannot be told from a stale or delayed one. Both nodes of a pair run the same version (the plugin version
+	// mismatch is reported), and every version since the transitions were introduced sends all three.
 	q := r.URL.Query()
 	tid := q.Get("tid")
-	if tid != "" && !tidRe.MatchString(tid) {
-		writeJSON(w, 400, map[string]string{"error": "malformed transition id"})
+	if !tidRe.MatchString(tid) {
+		writeJSON(w, 400, map[string]string{"error": "missing or malformed transition id"})
+		return
+	}
+	epoch, err := strconv.ParseUint(q.Get("epoch"), 10, 64)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": "missing or malformed epoch"})
+		return
+	}
+	ms, err := strconv.ParseInt(q.Get("exp"), 10, 64)
+	if err != nil || ms <= 0 {
+		writeJSON(w, 400, map[string]string{"error": "missing or malformed expiry"})
 		return
 	}
 	st := d.store.Get()
 	// a command from a node whose leadership generation is older than ours is stale (delayed, duplicated, or sent by a node
-	// that lost a split-brain): never obey it
-	if e, err := strconv.ParseUint(q.Get("epoch"), 10, 64); err == nil && e < st.Epoch {
-		d.event("warning", "ignored a promote request with a stale epoch (%d < %d)", e, st.Epoch)
+	// that lost a split-brain): never obey it. One from a generation far ahead of ours cannot come from the peer of this pair.
+	if epoch < st.Epoch {
+		d.event("warning", "ignored a promote request with a stale epoch (%d < %d)", epoch, st.Epoch)
 		writeJSON(w, 409, map[string]string{"error": "stale epoch"})
 		return
 	}
-	// a request that arrives after its validity ran out was delayed (frozen peer, queued connection): the sender has given up on it
-	if ms, err := strconv.ParseInt(q.Get("exp"), 10, 64); err == nil && time.Now().After(time.UnixMilli(ms).Add(reqSkew)) {
-		d.event("warning", "ignored an expired promote request (it was valid until %s)", time.UnixMilli(ms).UTC().Format(time.RFC3339))
+	if epoch > st.Epoch+maxEpochAhead {
+		d.event("warning", "ignored a promote request with an implausible epoch (%d, ours is %d)", epoch, st.Epoch)
+		writeJSON(w, 400, map[string]string{"error": "implausible epoch"})
+		return
+	}
+	// a request that arrives after its validity ran out was delayed (frozen peer, queued connection): the sender has given up on it;
+	// one whose validity is far in the future is not one this software sends (it would stay executable for a long time)
+	exp := time.UnixMilli(ms)
+	if time.Now().After(exp.Add(reqSkew)) {
+		d.event("warning", "ignored an expired promote request (it was valid until %s)", exp.UTC().Format(time.RFC3339))
 		writeJSON(w, 409, map[string]string{"error": "request expired"})
 		return
 	}
-	if tid != "" {
-		switch s := d.tx.begin(tid); s {
-		case "":
-		case txDone: // the same request delivered again: it already happened
-			writeJSON(w, 200, map[string]any{"status": "active", "replay": true})
-			return
-		default:
-			writeJSON(w, 409, map[string]string{"error": "transition " + s, "tx": s})
-			return
-		}
+	if exp.After(time.Now().Add(reqTTL + reqSkew)) {
+		d.event("warning", "ignored a promote request whose validity is too long (until %s)", exp.UTC().Format(time.RFC3339))
+		writeJSON(w, 400, map[string]string{"error": "validity too long"})
+		return
+	}
+	switch s := d.tx.begin(tid); s {
+	case "":
+	case txDone: // the same request delivered again: it already happened
+		writeJSON(w, 200, map[string]any{"status": "active", "replay": true})
+		return
+	default:
+		writeJSON(w, 409, map[string]string{"error": "transition " + s, "tx": s})
+		return
 	}
 	if d.store.Get().State == StateActive {
-		if tid != "" {
-			d.tx.finish(tid, nil)
-		}
+		d.tx.finish(tid, nil)
 		writeJSON(w, 409, map[string]string{"error": "already active", "state": StateActive})
 		return
 	}
 	t0 := time.Now()
-	err := d.doPromote("peer request")
-	if tid != "" {
-		d.tx.finish(tid, err)
-	}
+	err = d.doPromote("peer request, transition " + tid[:8] + ", sender epoch " + strconv.FormatUint(epoch, 10))
+	d.tx.finish(tid, err)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -242,6 +264,7 @@ type actions struct {
 	sh         func(name string, args ...string) (string, error)
 	plan       func(path string) (WarmPlan, error)
 	flush      func(dev string)
+	fence      func() error // replaces running the fencing command
 }
 
 func (d *Daemon) doPromote(reason string) error {

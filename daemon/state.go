@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -83,6 +85,10 @@ func openStore() (*Store, error) {
 		if err := json.Unmarshal(b, &st); err != nil {
 			return State{}, true, err
 		}
+		// valid JSON is not a valid state: "{}" or "null" must not turn a paired node into a standalone one
+		if err := st.validate(); err != nil || st.Role == "" {
+			return State{}, true, fmt.Errorf("%s: not a valid state (%v)", p, err)
+		}
 		return st, true, nil
 	}
 	st, exists, err := load(main)
@@ -111,26 +117,87 @@ func openStore() (*Store, error) {
 	return s, nil
 }
 
+// clone copies the pointers (Job, Kit) and the slice inside them, so that a copy of the state never shares memory with the live one.
+func (s State) clone() State {
+	if s.Job != nil {
+		j := *s.Job
+		j.Log = append([]string(nil), s.Job.Log...)
+		s.Job = &j
+	}
+	if s.Kit != nil {
+		k := *s.Kit
+		s.Kit = &k
+	}
+	return s
+}
+
+// validate is the check of a state before it is saved and after it was loaded: a role and a state that this software knows.
+func (s State) validate() error {
+	switch s.Role {
+	case RoleStandalone, RoleMaster, RoleStandby:
+	default:
+		return fmt.Errorf("unknown role %q", s.Role)
+	}
+	switch s.State {
+	case "", StateActive, StateStandby:
+	default:
+		return fmt.Errorf("unknown state %q", s.State)
+	}
+	return nil
+}
+
+// Get returns a copy: the caller can change it, or keep it, without touching or racing with the live state.
 func (s *Store) Get() State {
 	s.rd.RLock()
 	defer s.rd.RUnlock()
-	return s.data
+	return s.data.clone()
 }
 
-func (s *Store) Update(f func(*State)) error {
+// fsWrite is the durable write of the state files (a variable so that the tests can make the disk fail).
+var fsWrite = writeFileDurable
+
+// Update applies f to a copy of the state, validates and saves it, and only then publishes it to the readers.
+// The commit point is the rename of state.json (written and flushed first, then the .bak copy). If anything before it fails, nothing
+// changed: the memory still shows the previous state, which is the one on the disk, and the error is returned.
+func (s *Store) Update(f func(*State)) error { return s.commit(f, false) }
+
+// UpdateSafe is for the changes that follow something that already happened to the machine and that must be believed even if the
+// disk refuses them (a node that has gone down to standby, a node that has taken over): the new state is published, the failure to
+// save it is returned and logged. After a restart the node reads the old file, which boots as a silent standby.
+func (s *Store) UpdateSafe(f func(*State)) error { return s.commit(f, true) }
+
+func (s *Store) commit(f func(*State), publishAnyway bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.rd.Lock()
-	f(&s.data)
-	b, err := json.MarshalIndent(s.data, "", "  ")
-	s.rd.Unlock()
+	next := s.Get()
+	f(&next)
+	if next.Role == "" {
+		next.Role = RoleStandalone
+	}
+	if err := next.validate(); err != nil {
+		return fmt.Errorf("refused: %w", err)
+	}
+	b, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("state not saved: %w", err)
 	}
-	if err := writeFileDurable(filepath.Join(s.dir, "state.json"), b, 0o600); err != nil {
-		return err
+	publish := func() {
+		s.rd.Lock()
+		s.data = next
+		s.rd.Unlock()
 	}
-	return writeFileDurable(filepath.Join(s.dir, "state.json.bak"), b, 0o600)
+	if err := fsWrite(filepath.Join(s.dir, "state.json"), b, 0o600); err != nil {
+		log.Printf("STATE NOT SAVED: %v", err)
+		if publishAnyway {
+			publish()
+		}
+		return fmt.Errorf("state not saved: %w", err)
+	}
+	publish() // committed: the main file holds the new state
+	if err := fsWrite(filepath.Join(s.dir, "state.json.bak"), b, 0o600); err != nil {
+		log.Printf("state backup copy not written (the state itself is saved): %v", err)
+	}
+	return nil
 }
 
 func (s *Store) PairNow(role, addr string, port int, fp string) error {

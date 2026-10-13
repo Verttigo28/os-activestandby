@@ -3,7 +3,7 @@
 **Active/standby high availability for OPNsense, in the style of SonicWall HA.**
 One IP and one MAC per interface, shared by two firewalls. The standby sits silent and takes over in **0.1-0.2 s for a planned switch and about 3 s after a crash** in the hot mode (measured, see below).
 
-[![ci](https://github.com/Verttigo28/opn-betterHA/actions/workflows/ci.yml/badge.svg)](https://github.com/Verttigo28/opn-betterHA/actions/workflows/ci.yml)
+[![ci](https://github.com/Verttigo28/os-activestandby/actions/workflows/ci.yml/badge.svg)](https://github.com/Verttigo28/os-activestandby/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
 
 > Status: validated on **two Supermicro servers (Intel X710) with a real switch** (MikroTik CRS305 with real LACP bonds, 20 VLANs on a LAGG, the production configuration of a pfSense converted to OPNsense), with a client pinging every 20 ms through the switch: failover, crash, dead card, cold start, LACP. Earlier steps: a Hyper-V lab and the real daemons against each other on FreeBSD 15 ([sandbox](lab/sandbox/README.md)). Not yet validated: a production switch (Meraki, Juniper EX4600 and others: see the checklist in [operations](docs/operations.md#switch-checklist)), a power cut with a real PDU. TCP sessions kept across a failover were validated (section J5). Review the [security notes](docs/security.md) before putting it in front of production traffic. The hot standby is experimental.
@@ -39,7 +39,7 @@ For comparison, CARP (from its design, not measured here): about 3 to 6 s for a 
 **Core**
 - Shared IP/MAC (generated virtual MAC by default), standby fully silent, config locked on the standby.
 - Failover, measured on two Supermicro servers with a real switch (client view, 20 ms probes): **classic mode 1.0 s planned / 4.9 s crash** (failover LAGG), 12.5 s / 9.6 s with an LACP LAGG; **hot mode 0.1-0.2 s planned / about 3 s crash**, LACP included (3 s of it is the detection time). Firewall states follow through pfsync.
-- Split-brain protection: two heartbeat paths, epochs, isolation guard, optional fencing hook, boot guard (a rebooted node always starts as standby).
+- Split-brain protection: two heartbeat paths, epochs, isolation guard, optional fencing hook (and an option to refuse any automatic takeover without fencing), boot guard (a rebooted node always starts as standby). **Limit: two nodes without an external arbiter cannot tell a dead peer from a cut link; without a fencing command a silent peer is taken for dead after the detection time** ([what is and is not guaranteed](docs/audit.md)).
 - Whole-config replication with revisions, integrity checks and drift detection. Plugins and DHCP leases follow the active node.
 - **GUI logins survive a failover**: sessions are replicated, so you stay logged in on the new active node.
 

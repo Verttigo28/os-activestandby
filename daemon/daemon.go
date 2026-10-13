@@ -17,7 +17,7 @@ import (
 )
 
 // version is set at build time (-ldflags "-X main.version=...") by CI and build/build.ps1.
-var version = "1.0.1"
+var version = "1.0.2"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`
@@ -25,8 +25,10 @@ type Config struct {
 	MgmtDevice   string `json:"mgmt_device"`
 	AutoFailover *bool  `json:"auto_failover"`
 	AllowHAOnly  bool   `json:"allow_ha_only_promote"`
-	ForcePromisc bool   `json:"force_promisc"`
-	FastIfaces   *bool  `json:"fast_ifaces"` // bring static VLANs up natively at a takeover (default on, see fastpath.go)
+	// FenceRequired: a standby never takes over by itself because the peer went silent unless a fencing command is configured and succeeds.
+	FenceRequired bool  `json:"fence_required"`
+	ForcePromisc  bool  `json:"force_promisc"`
+	FastIfaces    *bool `json:"fast_ifaces"` // bring static VLANs up natively at a takeover (default on, see fastpath.go)
 
 	NotifyLevel      string `json:"notify_level"`
 	NotifyWebhook    string `json:"notify_webhook"`

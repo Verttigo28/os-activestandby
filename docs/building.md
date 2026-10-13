@@ -7,20 +7,20 @@ src/                           installed under /usr/local (src/sbin/hasyncd is b
 daemon/                        Go sources of hasyncd (standard library only)
 build/build-pkg.sh             builds the .pkg with plain pkg(8), runs on FreeBSD/OPNsense
 build/build.ps1                Windows driver: test, cross-compile, build the .pkg on a lab node, copy to dist/
-.github/workflows/ci.yml       CI: gofmt/vet/test, FreeBSD cross-build, .pkg on version tags (FreeBSD VM) + release upload
+.github/workflows/ci.yml       CI: staticcheck, govulncheck, gofmt/vet/test, shellcheck, FreeBSD cross-build, .pkg on version tags (FreeBSD VM) + release upload
 lab/                           Hyper-V lab tooling and notes (not part of the package)
 ```
 
 ## Build the package
-Anywhere with Go >= 1.22 and a FreeBSD/OPNsense host to run `pkg create` (any OPNsense node works, e.g. a spare VM):
+Anywhere with Go 1.22 or newer (`go.mod` language level; CI builds and tests with 1.27.0, use that for a release) and a FreeBSD/OPNsense host to run `pkg create` (any OPNsense node works, e.g. a spare VM):
 ```powershell
-.\build\build.ps1 -Version 0.5.0 -BuildNode peer      # lab shortcut; produces dist\os-activestandby-<version>.pkg
+.\build\build.ps1 -Version 1.0.2 -BuildNode peer      # lab shortcut; produces dist\os-activestandby-<version>.pkg
 ```
 By hand:
 ```sh
 cd daemon && go test ./... && GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o ../src/sbin/hasyncd .
 # copy the repo to a FreeBSD/OPNsense host, then:
-sh build/build-pkg.sh /path/to/repo 0.5.0 /path/to/out
+sh build/build-pkg.sh /path/to/repo 1.0.2 /path/to/out
 ```
 The package has no dependencies, ABI `FreeBSD:*:amd64`, and its install/removal scripts refresh the GUI caches and restart configd.
 
@@ -31,7 +31,7 @@ pkg delete os-activestandby              # break the pair first (the removal scr
 ```
 
 ## GitHub
-CI runs on every push and pull request: gofmt, vet and tests with the race detector (Linux and a FreeBSD cross-vet), lint of PHP, XML, JavaScript and shell. Pushing a tag `vX.Y.Z` builds `os-activestandby-X.Y.Z.pkg` on a FreeBSD VM and attaches it, with `SHA256SUMS` and generated release notes, to a GitHub release (the daemon version comes from the tag).
+CI runs on every push and pull request: staticcheck, govulncheck, gofmt, vet and tests with the race detector (Linux and a FreeBSD cross-vet), lint of PHP, XML and JavaScript, and ShellCheck on every shell script of the repository (a finding fails the build). Pushing a tag `vX.Y.Z` builds `os-activestandby-X.Y.Z.pkg` on a FreeBSD VM and attaches it, with `SHA256SUMS` and generated release notes, to a GitHub release (the daemon version comes from the tag).
 Releases are checksummed and, once the signing key is configured, also served as a signed pkg repository (see "Signing" below). Verify the key fingerprint out of band before trusting it.
 
 ## Plugins-framework build (optional)
@@ -48,7 +48,7 @@ Every release is protected in two independent ways.
 
 **1. Build provenance (public repositories).** GitHub only offers attestations for public repositories (or paid plans); CI skips the step otherwise. CI attaches a signed GitHub attestation to the `.pkg`. Anyone can check that the file was built by this repository's workflow from the tagged commit:
 ```sh
-gh attestation verify os-activestandby-<version>.pkg --repo Verttigo28/opn-betterHA
+gh attestation verify os-activestandby-<version>.pkg --repo Verttigo28/os-activestandby
 ```
 `SHA256SUMS` is published next to the package as well.
 
@@ -64,10 +64,10 @@ Without the secret the release still works (steps 1 above only); the repository 
 
 Client setup (each firewall):
 ```sh
-fetch -o /usr/local/etc/pkg/keys/activestandby.pub https://raw.githubusercontent.com/Verttigo28/opn-betterHA/main/keys/activestandby.pub
+fetch -o /usr/local/etc/pkg/keys/activestandby.pub https://raw.githubusercontent.com/Verttigo28/os-activestandby/main/keys/activestandby.pub
 cat > /usr/local/etc/pkg/repos/activestandby.conf <<'CONF'
 activestandby: {
-  url: "https://verttigo28.github.io/opn-betterHA",
+  url: "https://verttigo28.github.io/os-activestandby",
   signature_type: "pubkey",
   pubkey: "/usr/local/etc/pkg/keys/activestandby.pub",
   enabled: yes
