@@ -21,7 +21,7 @@ jobs:
       - name: staticcheck
         working-directory: daemon
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
           staticcheck ./...
       - name: vulnerabilities (no dependency, so this is the standard library of the Go that builds it)
         working-directory: daemon
