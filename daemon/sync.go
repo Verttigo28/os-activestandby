@@ -329,7 +329,7 @@ func (d *Daemon) applyPinned(out string) {
 	}
 	for _, i := range set.Data {
 		if strings.Contains(out, i.Key+"(") {
-			if d.cfg.ForcePromisc {
+			if d.cfg.ForcePromisc || vlanNeedsPromisc(i.Dev) {
 				sh("ifconfig", i.Dev, "promisc")
 			}
 			announce(i.Dev)

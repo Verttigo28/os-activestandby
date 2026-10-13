@@ -2,6 +2,21 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 0.9.1
+Found on real hardware (two Supermicro machines, Intel X710, a MikroTik switch as traffic generator, 20 VLANs on a LAGG, the production configuration).
+
+### A VLAN with its own MAC received nothing (fix)
+- **On the X710 a VLAN whose MAC differs from its parent's gets no unicast frame** (ARP works, so everything looked fine and every ping was lost); the vlan(4) driver does not put the child's MAC into the NIC's receive filter. The pairing gave every VLAN a MAC of its own. Now a VLAN on an assigned parent **shares the parent's MAC**; a VLAN on a parent that is not assigned gets its own MAC and OPNsense's `promisc` option; and after every takeover the daemon sets promiscuous mode on any VLAN whose MAC differs from its parent's (this also repairs pairs made with 0.9.0).
+
+### Takeover twice as fast
+- The promotion configured each interface with OPNsense's *reload* option, which restarts routing, IPsec, DHCP and Unbound **once per interface** (0.9 s each). It now configures the interface only; routes and DNS already ran once afterwards. With 21 interfaces: promotion **4.4-4.9 s instead of 10.1 s**, a crash of the active node is served again after 8.4 s, a dead card after 11.9 s, a graceful failover after 5.9 s (client view, measured at 20 ms). The phases of a promotion now show each tier ("tier 2: 20 interface(s) configured").
+
+### Fixes
+- A promotion that ran inside the automatic loop (it takes seconds) made the next tick report "this daemon did not run for 10s (frozen, paused or starved)" and restart the detection. The tick is now stamped when the step ends.
+
+### Validation
+- `docs/validation.md` section J: pairing, graceful failover, crash, dead card and cold start of both nodes, measured with the switch as client.
+
 ## 0.9.0
 Found by running the daemons against each other on a real FreeBSD 15 machine (`lab/sandbox`) and by measuring the NICs of the target hardware.
 

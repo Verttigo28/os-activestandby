@@ -57,3 +57,13 @@ Measured on the Supermicro (X710 and I210): setting a MAC with the link up drops
 Proven on a real kernel with the real daemons (results in [validation](validation.md) section I): pairing over mutual TLS, heartbeats on two paths, configuration replication, graceful failover in about 0.1 s with two lost pings, automatic takeover after a power cut, split-brain resolution, a promotion refused when pf does not work, the confirmation protocol after a lost or late request, a frozen peer, partitions, packet loss, a dead monitored interface, and in both the classic and the warm mode, with a detector that samples both nodes every 100 ms for two consecutive samples with the shared identity on both.
 
 Not proven by it: anything about a real NIC driver or switch (an `epair` has no link negotiation, no CAM table, no port security), OPNsense's own PHP (stubbed), timing on hardware, LACP with a real partner.
+
+## Third round (0.9.1): real hardware
+
+Two Supermicro machines with Intel X710 NICs, a real switch as traffic generator and the production configuration (20 VLANs on a LAGG). Results in [validation](validation.md) section J.
+
+| Severity | Component | Problem (shown by the hardware) | Cause | Correction | Validation |
+|---|---|---|---|---|---|
+| P0 | `spoof_macs.php`, `promote.go` | **A VLAN interface received no unicast packet.** ARP and broadcasts worked, every ping to the firewall or through it was lost. | The pairing gave every VLAN a MAC of its own; the vlan(4) driver does not put it into the receive filter of the X710, which holds the parent's MAC only (the sandbox's virtual NICs accept any MAC and could not show it). | A VLAN on an assigned parent shares the parent's MAC; one on an unassigned parent gets its own MAC plus OPNsense's `promisc`; the daemon sets promiscuous mode after a takeover on any VLAN still carrying another MAC than its parent's (`vlanmac.go`). | VLAN 65 and 40 answer with promiscuous mode off after re-pairing; unit tests for the detection |
+| P1 | `reconfigure_ifaces.php` | A promotion took 10.1 s with 21 interfaces (client outage up to 10 s). | The per-interface call used OPNsense's *reload* option: routing, IPsec, DHCP and Unbound restarted once per interface (0.9 s each instead of 0.17 s). | Interface only; routes and DNS already run once afterwards. | promotion 4.4-4.9 s; crash 8.4 s, dead card 11.9 s, graceful 5.9 s on the client |
+| P2 | `autofail.go` | After a promotion inside the automatic loop the daemon logged "did not run for 10s (frozen...)" and restarted its detection. | The tick was stamped when the step began, a promotion lasts seconds. | Stamped when the step ends. | cold start of both nodes: no warning |

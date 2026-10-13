@@ -86,7 +86,8 @@ func (d *Daemon) autoStep() {
 		d.event("warning", "this daemon did not run for %s (frozen, paused or starved): the silence of the peer across that gap is not evidence, the detection starts again from now", now.Sub(d.auto.lastTick).Round(time.Second))
 		d.hb.rebase()
 	}
-	d.auto.lastTick = now
+	// stamped when the step ENDS: a step that promotes this node takes seconds, and that is this daemon working, not a freeze
+	defer func() { d.auto.lastTick = time.Now() }()
 	st := d.store.Get()
 	if st.PeerFP == "" || (st.State != StateActive && st.State != StateStandby) {
 		d.auto.noActiveSince, d.auto.dualSince, d.auto.dualBusySince = time.Time{}, time.Time{}, time.Time{}

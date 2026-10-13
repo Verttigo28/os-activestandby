@@ -33,7 +33,28 @@ foreach (Config::getInstance()->object()->interfaces->children() as $n) {
 $details = legacy_interfaces_details();
 $cfg = Config::getInstance()->object();
 $pinned = [];
+/*
+ * A VLAN with a MAC of its own is not received on a real NIC unless the NIC is promiscuous (the receive filter holds the
+ * MAC of the parent only; measured on an Intel X710 under a failover LAGG: ARP works, no unicast packet arrives). So a
+ * VLAN on an assigned parent shares the parent's MAC (parents are pinned first), and a VLAN on a parent that is not
+ * assigned gets its own MAC together with <promisc> (OPNsense applies it each time the interface is configured).
+ */
+$vlanParent = [];
+foreach ($cfg->vlans->vlan ?? [] as $v) {
+    $vlanParent[(string)$v->vlanif] = (string)$v->if;
+}
+$parentNode = [];
 foreach ($cfg->interfaces->children() as $key => $node) {
+    if (!in_array((string)$key, $skip) && !empty((string)$node->enable) && !isset($vlanParent[(string)$node->if])) {
+        $parentNode[(string)$node->if] = $node;
+    }
+}
+$order = [];
+foreach ($cfg->interfaces->children() as $key => $node) {
+    $order[(isset($vlanParent[(string)$node->if]) ? 1 : 0) . '|' . count($order)] = [(string)$key, $node];
+}
+ksort($order);
+foreach ($order as [$key, $node]) {
     if (in_array((string)$key, $skip) || empty((string)$node->enable)) {
         continue;
     }
@@ -47,11 +68,17 @@ foreach ($cfg->interfaces->children() as $key => $node) {
     }
     if ((string)$node->spoofmac === '') {
         $new = strtolower($mac);
-        if ($virtual) {
+        $parent = $parentNode[$vlanParent[$dev] ?? ''] ?? null;
+        if ($virtual && $parent !== null && (string)$parent->spoofmac !== '') {
+            $new = strtolower((string)$parent->spoofmac); // a VLAN on an assigned parent shares the parent's MAC
+        } elseif ($virtual) {
             do {
                 $new = sprintf('02:%s', implode(':', str_split(bin2hex(random_bytes(5)), 2)));
             } while (isset($used[$new]));
             $used[$new] = true;
+            if (isset($vlanParent[$dev])) {
+                $node->promisc = '1'; // own MAC on a VLAN: the NIC must accept it
+            }
         }
         $node->spoofmac = $new;
         $pinned[] = "$key($dev)=" . $new;

@@ -85,4 +85,5 @@ Also replicated: the set of installed `os-*` plugins (the standby installs missi
 - A standby that boots with the active node's configuration *does* transmit with the shared IP and MAC (gratuitous ARP, IPv6 neighbour discovery) within seconds. On a real switch this moves the MAC to the standby's port. Hence the standby view and the early boot hook.
 - `<spoofmac>` gives both nodes identical MACs from replicated config alone.
 - OPNsense logs every config save and runs `rc.syshook config` on it; that is the replication trigger.
+- VLANs: a VLAN interface shares the shared MAC of its (assigned) parent. A VLAN with a MAC of its own is not received at all by a real NIC unless promiscuous (measured on the X710), so the pairing never gives one to a VLAN on an assigned parent, and after a takeover the daemon sets promiscuous mode on any VLAN whose MAC differs from its parent's.
 - Hyper-V quirks (lab only): the `hn` driver needs promiscuous mode for MACs that are not the hardware MAC (setting *Promiscuous mode on data interfaces*); a virtual switch does not relearn a vendor MAC owned by another port, so use locally administered MACs there.

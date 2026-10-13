@@ -107,6 +107,7 @@ For a layout where every network is a VLAN on a LAGG, select the VLAN interfaces
 | Status shows *degraded*, *pfsync_problem* or *package_diff* | degraded: the node is active but something failed during the takeover (read the event log); pfsync: states are not being replicated, sessions may not survive a failover; package_diff: the nodes have different plugins (nothing is removed automatically) |
 | Sync *behind*/*failed* | read the error in Status; *Full resync*; versions must match |
 | After failover traffic fails on Hyper-V or other virtual NICs | enable *Promiscuous mode on data interfaces*; use virtual (locally administered) MACs |
+| ARP works and the interface looks fine, but no unicast packet reaches a VLAN (ping to the firewall or through it fails) | a VLAN with a MAC different from its parent only receives with promiscuous mode on the parent (seen on the Intel X710). 0.9.1 makes a VLAN share its parent's MAC and sets promiscuous mode when it does not; check `ifconfig vlanN` against its parent, and enable *Promiscuous mode on data interfaces* on older versions |
 | Still asked to log in after a failover | *Keep GUI logins across a failover* must be on, on the active node, and the nodes must serve the same certificate (it is part of the replicated configuration) |
 | Standby GUI says "saved" but nothing changes | expected: the standby's configuration is locked |
 
@@ -127,4 +128,4 @@ For a layout where every network is a VLAN on a LAGG, select the VLAN interfaces
 - A single firewall that reboots (for example after a power cut) is down for the whole boot, plus 10 s (primary) or 30 s (secondary) before it promotes.
 - Hiding the core "High Availability" menu is cosmetic; the pages stay reachable by URL.
 
-**Before production, on the real hardware** (see `lab/hw-probe.sh`): link behaviour of the `ixl` NICs when the standby takes them down (does the switch see link loss?), a failover with a traffic generator, a power cut of the active firewall, a cold start of both firewalls together, a VLAN-specific shared MAC with promiscuous mode off, and a promote with your real number of VLANs.
+**Before production, on the real hardware** (see `lab/hw-probe.sh`): link behaviour of the `ixl` NICs when the standby takes them down (does the switch see link loss?), a failover with a traffic generator, a power cut of the active firewall, a cold start of both firewalls together, a VLAN-specific shared MAC with promiscuous mode off (done, see section J of the validation: it found a defect), and a promote with your real number of VLANs (done: 4.4-4.9 s with 21 interfaces).

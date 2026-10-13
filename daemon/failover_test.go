@@ -879,3 +879,20 @@ func TestFrozenActiveNodeDoesNotActOnAStalePeerView(t *testing.T) {
 		t.Fatal("an active node that was frozen must not change role because of what it did not hear")
 	}
 }
+
+// found on hardware: a promotion inside autoStep takes seconds; the next tick must not take that for a freeze of the daemon
+func TestAPromotionIsNotAFreeze(t *testing.T) {
+	old := stallGap
+	stallGap = 50 * time.Millisecond
+	t.Cleanup(func() { stallGap = old })
+	d, promoted := standbyWithSilentPeer(t, hbDead+time.Second, true)
+	inner := d.act.promote
+	d.act.promote = func(r string) error { time.Sleep(120 * time.Millisecond); return inner(r) } // longer than stallGap
+	d.autoStep()
+	if promoted.Load() != 1 {
+		t.Fatal("the takeover did not happen")
+	}
+	if time.Since(d.auto.lastTick) > 50*time.Millisecond {
+		t.Fatalf("the tick must be stamped when the step ends, not when it began (%v ago)", time.Since(d.auto.lastTick))
+	}
+}

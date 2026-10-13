@@ -106,7 +106,10 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		}
 		tiers[devTier(i)] = append(tiers[devTier(i)], i)
 	}
-	for _, group := range tiers {
+	for n, group := range tiers {
+		if len(group) == 0 {
+			continue
+		}
 		var rw sync.WaitGroup
 		var emu sync.Mutex
 		for _, i := range group {
@@ -126,6 +129,7 @@ func (d *Daemon) promote(reason string) (retErr error) {
 			}(i.Key)
 		}
 		rw.Wait()
+		ph.mark(fmt.Sprintf("tier %d: %d interface(s) configured", n, len(group)))
 	}
 	if out, err := sh(reconfScript, "routes"); err != nil {
 		log.Printf("promote: routes: %v: %s", err, out)
@@ -135,9 +139,10 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	if firstErr != nil {
 		return firstErr
 	}
-	if d.cfg.ForcePromisc {
-		// some virtual NIC drivers keep their hardware receive filter when the lladdr changes
-		for _, i := range enabled {
+	// some virtual NIC drivers keep their hardware receive filter when the lladdr changes; a VLAN with a MAC of its own
+	// is not received at all on a real NIC without promiscuous mode (vlanmac.go)
+	for _, i := range enabled {
+		if d.cfg.ForcePromisc || vlanNeedsPromisc(i.Dev) {
 			sh("ifconfig", i.Dev, "promisc")
 		}
 	}

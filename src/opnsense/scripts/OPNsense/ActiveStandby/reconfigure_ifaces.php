@@ -24,7 +24,9 @@ $rc = 0;
 try {
     switch ($mode) {
         case 'iface':
-            interface_configure(true, trim($argv[2] ?? ''), true, false, true);
+            // reload=false: the interface itself only. reload=true also re-creates the device and, per interface, restarts routing,
+            // IPsec, DHCP and DNS (Unbound alone costs about 0.5 s each): those run once, after all interfaces, in the steps below.
+            interface_configure(true, trim($argv[2] ?? ''), false);
             break;
         case 'routes':
             system_routing_configure(true);
