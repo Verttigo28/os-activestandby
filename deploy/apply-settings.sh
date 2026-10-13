@@ -19,7 +19,7 @@ MGMT_IF="${MGMT_IF:-}"            # management interface, stays up on the standb
 ENABLED="${ENABLED:-1}"                         # this firewall runs the HA service
 AUTO_FAILOVER="${AUTO_FAILOVER:-1}"                   # the standby takes over by itself
 DETECT_TIME="${DETECT_TIME:-3}"                     # seconds of silence before the peer counts as dead (1-30; 3 is the safe default)
-HA_MODE="${HA_MODE:-classic}"                   # classic | warm (experimental: validate with lab/warm-probe.sh and docs/validation.md section H first)
+HA_MODE="${HA_MODE:-classic}"                   # classic | warm | hot (both experimental: docs/fast-ha.md)
 VIRTUAL_MAC="${VIRTUAL_MAC:-1}"                     # generated shared MAC (02:...) instead of the primary's hardware MAC
 FORCE_PROMISC="${FORCE_PROMISC:-0}"                   # only for virtual NICs; real NICs reprogram their receive filter
 PREEMPT="${PREEMPT:-0}"                         # 1: the primary takes the active role back by itself after a failback delay
@@ -47,7 +47,7 @@ fi
 
 [ -n "$HA_IF" ] || { echo "set HA_IF to the interface key of the HA link (for example opt1)"; exit 2; }
 [ "$HA_IF" != "$MGMT_IF" ] || { echo "HA and management interface must differ"; exit 2; }
-case "$HA_MODE" in classic | warm) ;; *) echo "HA_MODE must be classic or warm"; exit 2 ;; esac
+case "$HA_MODE" in classic | warm | hot) ;; *) echo "HA_MODE must be classic, warm or hot"; exit 2 ;; esac
 
 # every value is URL-encoded by curl: a space or an ampersand in a value cannot add or change another setting
 set --

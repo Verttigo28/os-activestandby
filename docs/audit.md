@@ -78,3 +78,15 @@ Two Supermicro machines with Intel X710 NICs, a real switch as traffic generator
 | info | lab | 3-4 s of extra outage after every takeover. | RSTP auto-edge on the switch ports. | Edge ports (documented requirement). | 1.0 s graceful |
 
 Security review of the new code: the fast path passes only values from the plan to `ifconfig` as separate arguments (no shell), after checking them again in Go; a VLAN that is not in the expected state before (existing address) or after is left to the stock code, which flushes and reconfigures it, so the fast path cannot make a takeover different, only faster; the early ruleset is the ruleset the node is going to keep (authoritative reload follows), and established connections never depended on it (pfsync states).
+
+## Fifth round (0.9.3): the hot standby on real LACP
+
+| Severity | Component | Problem (shown by the hardware) | Cause | Correction | Validation |
+|---|---|---|---|---|---|
+| P1 | `hot.go` | The LACP LAGG of the standby was shut down every 3 s by the transmit watch, so no takeover could be hot. | A LAGG in LACP mode transmits LACPDUs (counted in its software counter). | LACP LAGGs are exempt from the watch (their VLANs are not). | LACP takeover in 176-222 ms |
+| P1 | `hot.go` | After a node had been active, every VLAN was shut down when it stood down. | The watch kept the baseline from before it was active; the traffic it carried looked like a standby that speaks. | The baseline is taken when a device is made silent (and forgotten when it takes its addresses). | dead card and crash tests: the old active returns as a ready standby |
+| P1 | `fastpath.go` | The native VLAN takeover failed on the hardware (`inet6: bad value`, `inet: bad value`). | After `inet <address>` ifconfig reads the next word as a peer address, also after `alias`. | One invocation per address, in the order of OPNsense's code. | VLANs in 0.06-0.14 s |
+| P1 | design | Hot standby on an LACP LAGG could merge both firewalls into one LAG on a switch that aggregates dynamically. | The standby's LACP system id is the shared MAC. | Opt-in setting (*Hot standby with an LACP LAGG*), default off, documented; the measured bonds (RouterOS) stay separate. | two bonds, two active ports each, partner system id = shared MAC |
+| info | design | A standby that leaks a frame with the shared MAC would move the MAC on the switch. | A NIC may transmit with the OS MAC. | Transmit watch on every silent interface, shut down on the first packet; the packet filter of the standby must have its default deny. | measured silent for 45 s on the X710; unit tests for both checks |
+
+Known limit (documented): the ruleset on a standby is the one of its last active period; the authoritative reload of the takeover refreshes it 1-2 s in.

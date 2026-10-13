@@ -24,11 +24,13 @@ type fakeDev struct {
 	up, carrier, promisc, nd6off bool
 	ether, hw                    string
 	inet, inet6                  []string
-	refuseMAC                    bool // the driver ignores a MAC change
-	noHWLine                     bool // ifconfig does not print "hwaddr"
+	refuseMAC                    bool   // the driver ignores a MAC change
+	noHWLine                     bool   // ifconfig does not print "hwaddr"
+	tx                           uint64 // software transmit counter (netstat Opkts)
 }
 
 type wire struct {
+	hot        bool // a silent device may carry the shared MAC: only a device with an address counts as an owner
 	mu         sync.Mutex
 	hosts      []*fakeHost
 	shared     map[string]bool
@@ -36,10 +38,11 @@ type wire struct {
 }
 
 type fakeHost struct {
-	w    *wire
-	name string
-	devs map[string]*fakeDev
-	log  []string
+	pfRules string // what `pfctl -sr` prints ("" = not modelled)
+	w       *wire
+	name    string
+	devs    map[string]*fakeDev
+	log     []string
 }
 
 func newWire(shared ...string) *wire {
@@ -64,9 +67,11 @@ func nic(hw string) *fakeDev {
 func (w *wire) check(what string) { // caller holds w.mu
 	count := map[string]int{}
 	for _, h := range w.hosts {
+		seen := map[string]bool{} // a node owns the MAC once, however many of its devices carry it (a LAGG and its VLANs)
 		for _, d := range h.devs {
-			if w.shared[d.ether] && d.up {
+			if w.shared[d.ether] && d.up && (!w.hot || len(d.inet) > 0) && (!w.hot || !seen[d.ether]) {
 				count[d.ether]++
+				seen[d.ether] = true
 			}
 		}
 	}
@@ -123,6 +128,19 @@ func without(l []string, ip string) []string {
 func (h *fakeHost) sh(name string, args ...string) (string, error) {
 	h.w.mu.Lock()
 	defer h.w.mu.Unlock()
+	if name == "pfctl" {
+		if h.pfRules == "" {
+			return "", fmt.Errorf("pfctl not modelled")
+		}
+		return h.pfRules, nil
+	}
+	if name == "netstat" && len(args) == 4 { // netstat -I dev -n -b
+		d, ok := h.devs[args[1]]
+		if !ok {
+			return "", fmt.Errorf("no such interface")
+		}
+		return fmt.Sprintf("Name Mtu Network Address Ipkts Ierrs Idrop Ibytes Opkts Oerrs Obytes Coll\n%s 1500 <Link#1> %s 0 0 0 0 %d 0 0 0\n", args[1], d.ether, d.tx), nil
+	}
 	if name != "ifconfig" {
 		return "", fmt.Errorf("unexpected command %s", name)
 	}

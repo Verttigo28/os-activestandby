@@ -32,8 +32,17 @@
                 <OptionValues>
                     <classic>Classic standby (interfaces down)</classic>
                     <warm>Warm standby (experimental: interfaces up and silent)</warm>
+                    <hot>Hot standby (experimental: interfaces up, silent, already carrying the shared MAC)</hot>
                 </OptionValues>
             </ha_mode>
+            <hot_lacp type="OptionField">
+                <Default>off</Default>
+                <Required>Y</Required>
+                <OptionValues>
+                    <off>LACP LAGG uses the classic takeover (safe with any switch)</off>
+                    <shared>LACP LAGG stays up with the shared MAC (fastest: one static port-channel per firewall)</shared>
+                </OptionValues>
+            </hot_lacp>
             <fast_ifaces type="BooleanField">
                 <Default>1</Default>
                 <Required>Y</Required>

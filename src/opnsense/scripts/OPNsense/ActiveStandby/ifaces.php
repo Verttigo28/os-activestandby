@@ -74,6 +74,10 @@ function warmPlan(SimpleXMLElement $cfg): array
     foreach ($cfg->vlans->vlan ?? [] as $v) {
         $vlans[(string)$v->vlanif] = (string)$v->if;
     }
+    $laggs = []; // dev => protocol
+    foreach ($cfg->laggs->lagg ?? [] as $l) {
+        $laggs[(string)$l->laggif] = strtolower((string)$l->proto);
+    }
     $vips = [];
     $badVip = [];
     foreach ($cfg->virtualip->vip ?? [] as $v) {
@@ -159,11 +163,47 @@ function warmPlan(SimpleXMLElement $cfg): array
                 }
             }
         }
+        // hot standby (ha_mode "hot"): the same questions, with LAGG as an interface or a VLAN parent allowed
+        $hwhy = '';
+        $isLagg = isset($laggs[$i['dev']]);
+        $hv6 = '';
+        $a6h = (string)$node->ipaddrv6;
+        if ($a6h !== '' && $a6h !== 'none') {
+            if (filter_var($a6h, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false && (int)$node->subnetv6 >= 1 && (int)$node->subnetv6 <= 128) {
+                $hv6 = $a6h . '/' . (int)$node->subnetv6;
+            } else {
+                $hwhy = 'IPv6 address is not static';
+            }
+        }
+        if ($hwhy !== '') {
+            // keep the message
+        } elseif (!$i['enabled']) {
+            $hwhy = 'interface is disabled';
+        } elseif (!preg_match('/^[a-z][a-z0-9_.]{0,30}$/', $i['dev'])) {
+            $hwhy = 'unusable device name';
+        } elseif ($parent === '' && !$isLagg && !preg_match('/^[a-z]+[0-9]+$/', $i['dev'])) {
+            $hwhy = 'device type is not supported by the hot standby';
+        } elseif ($parent === '' && !$isLagg && preg_match('/^(bridge|gre|gif|vxlan|qinq|epair|ppp|pppoe|pptp|l2tp|vlan)\d*$/', $i['dev'])) {
+            $hwhy = 'device type ' . preg_replace('/\d+$/', '', $i['dev']) . ' is not supported by the hot standby';
+        } elseif ($isLagg && !in_array($laggs[$i['dev']], ['failover', 'loadbalance', 'roundrobin', 'lacp'], true)) {
+            $hwhy = 'the LAGG uses the protocol ' . $laggs[$i['dev']];
+        } elseif ($parent !== '' && !isset($laggs[$parent]) && !preg_match('/^[a-z]+[0-9]+$/', $parent)) {
+            $hwhy = 'the VLAN sits on ' . $parent . ', which is neither a NIC nor a LAGG';
+        } elseif ($parent !== '' && preg_match('/^(bridge|gre|gif|vxlan|qinq|epair|ppp|pppoe|pptp|l2tp|vlan)\d*$/', $parent)) {
+            $hwhy = 'the VLAN sits on ' . $parent . ', which is neither a NIC nor a LAGG';
+        } elseif (!preg_match('/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i', $i['spoofmac']) || (hexdec(substr($i['spoofmac'], 0, 2)) & 1)) {
+            $hwhy = 'no shared MAC address (spoofmac) is set';
+        } elseif ($fv4 === '') {
+            $hwhy = 'IPv4 address is not static';
+        } elseif (isset($badVip[$i['key']])) {
+            $hwhy = 'virtual IP of type ' . $badVip[$i['key']] . ' on this interface';
+        }
         $out[$i['key']] = ['key' => $i['key'], 'dev' => $i['dev'], 'mac' => strtolower($i['spoofmac']), 'mtu' => (int)$node->mtu,
             'v4' => $v4, 'v6' => $v6, 'vips' => $vips[$i['key']] ?? [], 'parent' => $parent, 'eligible' => $why === '', 'reason' => $why,
             'fast' => $fwhy === '', 'fast_why' => $fwhy, 'fast_v4' => $fv4, 'fast_mac' => strtolower($i['spoofmac']),
             'descr' => ((string)$node->descr !== '' ? (string)$node->descr : strtoupper($i['key'])) . ' (' . $i['key'] . ')',
-            'promisc' => (string)$node->promisc !== ''];
+            'promisc' => (string)$node->promisc !== '',
+            'hot' => $hwhy === '', 'hot_why' => $hwhy, 'hot_v4' => $fv4, 'hot_v6' => $hv6];
     }
     // a VLAN is only as warm as its parent: an assigned parent must be eligible itself
     $byDev = [];
@@ -176,7 +216,12 @@ function warmPlan(SimpleXMLElement $cfg): array
             $out[$k]['reason'] = 'its parent ' . $e['parent'] . ' cannot be warm: ' . $out[$byDev[$e['parent']]]['reason'];
         }
     }
-    return ['ifaces' => array_values($out)];
+    $lg = [];
+    foreach ($cfg->laggs->lagg ?? [] as $l) {
+        $lg[] = ['dev' => (string)$l->laggif, 'proto' => strtolower((string)$l->proto),
+            'members' => array_values(array_filter(array_map('trim', explode(',', (string)$l->members))))];
+    }
+    return ['ifaces' => array_values($out), 'laggs' => $lg];
 }
 
 $cmd = $argv[1] ?? '';

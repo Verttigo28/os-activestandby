@@ -188,3 +188,23 @@ Same hardware and probes as J (client pinging every 20 ms through the real switc
 New connections and established ones: established flows already pass on the states pfsync replicated (the ruleset of the standby has no rule for them, yet they pass, which is the proof that the states arrive); a new flow needs the ruleset, which is now generated while the interfaces come up (`packet filter loaded (early)` in the history), and then again, authoritatively, after routes and gateways (the old final reload). The measured outage of new flows (a new ICMP id and so a new state for each probe) equals that of the established ones: the link of the LAGG, not pf, is what waits.
 
 **A silent standby that keeps its links up, measured (not built):** with `lagg0` and both X710 ports up, carrying the **shared MAC**, no address and IPv6 off, the standby emitted 2381 frames in 45 s on the two ports; all were LLDP from the firmware agent of the NIC, sent with the **permanent** MAC of the port (3C:FD:FE...), none with the shared MAC, and the switch kept the shared MAC on the port of the active node. Setting the shared MAC on a port that is already up and linked took 53 ms here and the link did not drop when the MAC was already in place. This is what a warm standby would need to take over without any link event; it does not apply to an LACP LAGG (the standby would send LACP PDUs with the shared MAC as system id) and is not implemented.
+
+### J3. Hot standby and LACP, 0.9.3
+
+Same pair; the LAGG now has **two ports per firewall** (`ixl0` and `ixl1` of each machine cabled to the switch) and the switch has two **802.3ad bonds** with a 1 s LACP rate, one per firewall (RouterOS `/interface bonding`); the LAGG of the firewalls is switched from failover to LACP with the fast timeout. Both bonds come up with two active ports each, and both report the **shared MAC as LACP partner system id**: with one static bond per firewall the switch does not merge them. Probes as before (20 ms, through the switch).
+
+| Scenario (client view) | Classic, failover LAGG | Classic, LACP | Hot, failover LAGG | Hot, LACP shared |
+|---|---|---|---|---|
+| Promotion duration (21 interfaces) | 3.1-3.8 s | 2.3-3.2 s | 176-222 ms | 176-222 ms |
+| Graceful failover | 1.0 s | **12.5 s** | 0.12 s / 0.16 s (gateway / forwarded) | 0.10 s / 0.18 s |
+| Crash of the active node (kernel panic) | 4.9 s | 9.6 s | 2.8 s | 3.0 s |
+| Dead card (both ports of the active node cut at the switch) | 5.1 s | - | - | 3.1 s (twice) |
+| New connections during a graceful failover | - | - | - | one probe in five lost, nothing after: the ruleset of the standby is already loaded |
+
+The crashed node comes back by itself as a ready hot standby with its LACP bundle established. What the hardware showed and the daemon was corrected for (all three are in the unit tests now):
+
+- The transmit watch shut down the LACP LAGG every few seconds: a LAGG in LACP mode transmits LACPDUs, which are not a leak (link-local frames a bridge neither forwards nor learns). LACP LAGGs are exempt, their VLANs are not.
+- A node that had been active carried thousands of transmitted packets in its counters, and the next time it stood down the watch took that for a standby that speaks and shut every VLAN down. The baseline is now taken when a device is made silent.
+- `ifconfig` reads the word after `inet <address>` as the peer address of a point-to-point link (also after `alias`): the native VLAN takeover first failed with "inet6: bad value" on the hardware; the commands are now one per address.
+
+What is not covered: a switch that aggregates LACP dynamically (it would merge the two firewalls, which is why *LACP shared* is opt-in and says so), more than two ports per LAGG, mixed hot and classic interfaces under load, the `own` MAC variant of an LACP LAGG (not built: it needs the permanent MAC memory and renegotiates LACP at the takeover for an interface directly on the LAGG).

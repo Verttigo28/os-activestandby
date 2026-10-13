@@ -24,6 +24,6 @@ Open items, most valuable first. Done items live in the [changelog](../CHANGELOG
 ## From the failover audit (see `docs/audit.md`)
 
 13. **Fencing in production**: a two-node cluster cannot exclude a double active under a symmetric partition without it. Strongly recommended wherever an IPMI or a smart PDU exists.
-14. **Warm standby validation and tuning** (`docs/fast-ha.md`, `docs/validation.md` section H): the mode exists but has never run on hardware; measure, then tune (routes and pf reload natively, reconcile of OPNsense state, switch learning).
-15. **Warm standby for the interfaces that fall back to classic today** (LAGG, dynamic addressing), only if the measured gain justifies the added risk.
+14. **Hot standby**: built and measured on two machines (0.9.3). Open: a switch that aggregates LACP dynamically, more than two ports per LAGG, refreshing the standby ruleset from every config sync (so that its first second after a takeover is judged by the current rules), and the same on other NIC families (the transmit watch will say).
+15. The warm standby (own MAC) stays as it is; the hot standby replaced the reason to extend it.
 16. Epoch on configuration pushes and a nonce on the peer API (defence in depth; the pinned TLS identity already limits both to the peer).

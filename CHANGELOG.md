@@ -2,6 +2,18 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 0.9.3
+Measured on the two Supermicro machines with the MikroTik switch, with LACP bonds ([validation](docs/validation.md) section J3).
+
+### Hot standby (new mode, experimental, off by default)
+- **The standby keeps the LAGG, its ports and the VLANs up, already carrying the shared MAC, with no address and IPv6 off; the takeover only adds the addresses.** 21 interfaces in 176-222 ms with no link event. Client view: graceful failover **0.10-0.18 s**, crash of the active node 2.8-3.0 s (3 s of it is the detection), dead card 3.1 s. With an LACP LAGG on real 802.3ad bonds the classic takeover took **12.5 s** (graceful) and 9.6 s (crash).
+- Works with failover, load-balance, round-robin and **LACP** LAGGs, NICs and VLANs. *Hot standby with an LACP LAGG*: *Off* (default, classic takeover for an interface directly on the LAGG), *Shared* (the standby's LACP bundle stays established with the shared MAC as system id; needs one static port-channel per firewall, a dynamically aggregating switch would merge both firewalls). VLANs on an LACP LAGG that is not an interface are hot in both cases.
+- Safety: the daemon watches the software transmit counter of every silent interface of the standby and shuts down one that transmits (LACPDUs of an LACP LAGG excepted), checks that the standby's packet filter has its default deny, verifies every interface before and after the takeover, undoes and falls back to the classic takeover on any doubt.
+- Measured on the X710: a standby with the shared MAC and no address sends nothing with it (the firmware LLDP agent uses the permanent MAC of the port).
+
+### Fixes found on the way
+- The pre-flight and the status name the mode (warm or hot) and the interfaces that keep the classic takeover with the reason.
+
 ## 0.9.2
 Measured on the two Supermicro machines with the MikroTik switch as client (`docs/validation.md` section J2).
 

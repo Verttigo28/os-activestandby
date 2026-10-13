@@ -17,7 +17,7 @@ import (
 )
 
 // version is set at build time (-ldflags "-X main.version=...") by CI and build/build.ps1.
-var version = "0.9.2"
+var version = "0.9.3"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`
@@ -42,7 +42,8 @@ type Config struct {
 	MgmtProbeTargets string `json:"mgmt_probe_targets"` // pinged from the management address on both nodes (e.g. the management switch)
 	SyncSessions     *bool  `json:"sync_sessions"`      // replicate GUI logins to the standby (default on)
 	PairExpires      string `json:"pair_expires"`       // ... and its deadline
-	HAMode           string `json:"ha_mode"`            // "classic" (default) or "warm" (see warm.go)
+	HAMode           string `json:"ha_mode"`            // "classic" (default), "warm" (warm.go) or "hot" (hot.go)
+	HotLACP          string `json:"hot_lacp"`           // hot standby with a LACP LAGG: "shared" (the standby LAGG carries the shared MAC) or "off" (default)
 }
 
 func (c Config) autoOn() bool       { return c.AutoFailover == nil || *c.AutoFailover }
@@ -104,7 +105,10 @@ func loadConfig() Config {
 	if c.ListenPort < 1024 || c.ListenPort > 65535 {
 		c.ListenPort = 7690
 	}
-	if c.HAMode != "warm" { // anything else is the classic mode
+	if c.HotLACP != "shared" {
+		c.HotLACP = "off"
+	}
+	if c.HAMode != "warm" && c.HAMode != "hot" { // anything else is the classic mode
 		c.HAMode = "classic"
 	}
 	// device names end up as arguments of ifconfig and friends: only plain names

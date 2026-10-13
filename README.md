@@ -60,7 +60,7 @@ Details: [getting started](docs/getting-started.md), [operations](docs/operation
 | [Validation](docs/validation.md) | what was tested, how, and what still needs hardware |
 | [Audit](docs/audit.md) | failover safety audit: findings, fixes, the limits of a two-node cluster |
 | [Sandbox](lab/sandbox/README.md) | two real nodes on one FreeBSD machine: the scenarios, what they prove and what they cannot |
-| [Warm standby](docs/fast-ha.md) | experimental mode: standby keeps its links up; design, limits, what is untested |
+| [Warm and hot standby](docs/fast-ha.md) | experimental modes: the standby keeps its links up (hot: already with the shared MAC, takeover in about 0.2 s, LACP included); design, measurements, comparison with CARP |
 | [Building](docs/building.md) | build, CI, releases |
 | [Roadmap](docs/roadmap.md) | what is open |
 | [Changelog](CHANGELOG.md) | release history |

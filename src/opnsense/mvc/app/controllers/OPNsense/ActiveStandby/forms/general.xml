@@ -123,7 +123,7 @@
         <id>activestandby.general.ha_mode</id>
         <label>Standby mode</label>
         <type>dropdown</type>
-        <help>Classic: the standby keeps its data interfaces down; a takeover brings the links up (a real NIC needs seconds to renegotiate). Warm (experimental): the standby keeps the links of its shared interfaces up with its own MAC address, no IP address and IPv6 off, and takes the shared MAC and addresses at takeover. Only interfaces with a static IPv4 address, a shared MAC and a plain NIC or VLAN qualify; the others keep the classic takeover, and any problem falls back to it. Needs a switch that accepts two MAC addresses on the port group and a NIC driver that changes its MAC without dropping the link: validate on your hardware first (docs/fast-ha.md). Copied from the active firewall: it is the same on both.</help>
+        <help>Classic: the standby keeps its data interfaces down; a takeover brings the links up (a real NIC needs seconds to renegotiate). Warm (experimental): the standby keeps the links of its shared interfaces up with its own MAC address, no IP address and IPv6 off, and takes the shared MAC and addresses at takeover. Only interfaces with a static IPv4 address, a shared MAC and a plain NIC or VLAN qualify; the others keep the classic takeover, and any problem falls back to it. Needs a switch that accepts two MAC addresses on the port group and a NIC driver that changes its MAC without dropping the link: validate on your hardware first (docs/fast-ha.md). Hot (experimental): the standby keeps the LAGG, its ports and the VLANs up AND already carrying the shared MAC, with no address and IPv6 off; the takeover only adds the addresses (measured: 120 ms of outage for a client), nothing changes on any link. It watches that the standby never transmits (a device that does is shut down) and that its packet filter has a default deny. Works with failover, load-balance and LACP LAGGs (see the next setting for LACP). Copied from the active firewall: it is the same on both.</help>
     </field>
     <field>
         <id>activestandby.general.fast_ifaces</id>
@@ -131,6 +131,13 @@
         <type>checkbox</type>
         <advanced>true</advanced>
         <help>At a takeover, VLANs with a static IPv4 address (and IP aliases) are brought up with a single ifconfig instead of the PHP interface code, about 2 s faster with 20 VLANs. Anything else (the LAGG, physical NICs, DHCP, IPv6, an MTU, bridges, GRE/GIF, static ARP entries) still uses the stock code, and a VLAN that does not come up as planned falls back to it. Copied from the active firewall.</help>
+    </field>
+    <field>
+        <id>activestandby.general.hot_lacp</id>
+        <label>Hot standby with an LACP LAGG</label>
+        <type>dropdown</type>
+        <advanced>true</advanced>
+        <help>Only for the Hot standby mode and an interface that is directly on a LAGG in LACP mode (VLANs on an unassigned LACP LAGG are always hot). Off: that interface and its VLANs keep the classic takeover. Shared: the standby keeps its LACP bundle established with the shared MAC as system id, so the takeover adds addresses only (fastest). The switch must have one STATIC port-channel per firewall: a switch that aggregates dynamically by the partner system id (some HP/Aruba, Linux-style bonding on the switch side) would merge both firewalls into one LAG. Measured with RouterOS 802.3ad bonds: two separate bonds, both with the shared MAC as partner system id, both fully active. Copied from the active firewall.</help>
     </field>
     <field>
         <id>activestandby.general.force_promisc</id>

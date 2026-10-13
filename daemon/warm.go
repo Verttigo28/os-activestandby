@@ -56,10 +56,24 @@ type WarmIface struct {
 	FastMAC string `json:"fast_mac"` // the interface's MAC from the configuration, "" when none is set
 	Descr   string `json:"descr"`    // interface description, as OPNsense prints it
 	Promisc bool   `json:"promisc"`  // the interface has the promiscuous option
+
+	// hot standby (hot.go): the same questions with LAGG allowed
+	Hot    bool   `json:"hot"`
+	HotWhy string `json:"hot_why"`
+	HotV4  string `json:"hot_v4"`
+	HotV6  string `json:"hot_v6"`
 }
 
 type WarmPlan struct {
 	Ifaces []WarmIface `json:"ifaces"`
+	Laggs  []LaggInfo  `json:"laggs"`
+	Hot    bool        `json:"-"` // set by hotView: Eligible/V4/V6 then answer the hot standby's questions
+}
+
+type LaggInfo struct {
+	Dev     string   `json:"dev"`
+	Proto   string   `json:"proto"`
+	Members []string `json:"members"`
 }
 
 func loadPlan(path string) (WarmPlan, error) {
@@ -74,6 +88,9 @@ func loadPlan(path string) (WarmPlan, error) {
 // warmDevices returns the devices that stay up on the standby, with their shared MAC ("" for a VLAN parent that is not a
 // shared interface itself). Devices the daemon must never touch (HA/management) are excluded.
 func warmDevices(p WarmPlan, keepUp []string) map[string]string {
+	if p.Hot {
+		return hotDevices(p, keepUp)
+	}
 	keep := map[string]bool{}
 	for _, k := range keepUp {
 		keep[k] = true
@@ -272,7 +289,18 @@ type warmStatus struct {
 	at      time.Time
 }
 
-func (d *Daemon) warmOn() bool { return d.cfg.HAMode == "warm" }
+func (d *Daemon) warmOn() bool { return d.cfg.HAMode == "warm" || d.cfg.HAMode == "hot" }
+
+// hotOn: the standby keeps its links up WITH the shared MAC already in place (hot.go).
+func (d *Daemon) hotOn() bool { return d.cfg.HAMode == "hot" }
+
+// modeView: the plan as the standby mode asks the questions.
+func (d *Daemon) modeView(p WarmPlan) WarmPlan {
+	if d.hotOn() {
+		return hotView(p, d.cfg.HotLACP == "shared")
+	}
+	return sanitize(p)
+}
 
 func (d *Daemon) run(name string, args ...string) (string, error) {
 	if d.act != nil && d.act.sh != nil {
@@ -308,7 +336,7 @@ func (d *Daemon) warmPlanFor(path string) (*WarmPlan, error) {
 func (d *Daemon) planFor(path string) (*WarmPlan, error) {
 	if d.act != nil && d.act.plan != nil {
 		p, err := d.act.plan(path)
-		p = sanitize(p)
+		p = d.modeView(p)
 		return &p, err
 	}
 	d.ops.planMu.Lock()
@@ -321,7 +349,7 @@ func (d *Daemon) planFor(path string) (*WarmPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	p = sanitize(p)
+	p = d.modeView(p)
 	if fi != nil {
 		d.ops.plan, d.ops.planMtime, d.ops.planPath = &p, fi.ModTime(), path
 	}
@@ -331,6 +359,9 @@ func (d *Daemon) planFor(path string) (*WarmPlan, error) {
 // warmSilence makes one warm device silent (own MAC, no addresses, IPv6 off, link up). It returns an error when the
 // permanent MAC is not known: the caller then treats the device the classic way (down).
 func (d *Daemon) warmSilence(dev, shared string) (ifState, error) {
+	if d.hotOn() {
+		return d.hotSilence(dev, shared)
+	}
 	st := d.readIf(dev)
 	if !st.Exists {
 		return st, fmt.Errorf("%s does not exist", dev)
@@ -427,6 +458,9 @@ func (d *Daemon) warmReadiness(path string, set IfaceSet) {
 		}
 		warm = append(warm, dev)
 	}
+	if d.hotOn() && len(problems) == 0 {
+		problems = append(problems, d.hotChecks(p, devs)...)
+	}
 	switch {
 	case len(devs) == 0:
 		d.setWarm(false, "no interface qualifies for the warm standby (all use the classic takeover)", nil, classic)
@@ -476,12 +510,15 @@ func (d *Daemon) warmInfo() map[string]any {
 	ok, why := d.warmReady()
 	d.wst.mu.Lock()
 	defer d.wst.mu.Unlock()
-	return map[string]any{"mode": "warm", "ready": ok, "reason": why, "warm_ifaces": d.wst.warm, "classic_ifaces": d.wst.classic}
+	return map[string]any{"mode": d.cfg.HAMode, "ready": ok, "reason": why, "warm_ifaces": d.wst.warm, "classic_ifaces": d.wst.classic}
 }
 
 // warmActivate gives the shared identity to every eligible interface natively. It returns the keys it handled. Any failure
 // reverts what it did and returns an error: the caller then runs the classic path for everything. Caller holds ops.mu.
 func (d *Daemon) warmActivate(p *WarmPlan, set IfaceSet) (map[string]bool, error) {
+	if d.hotOn() {
+		return d.hotActivate(p, set)
+	}
 	if ok, why := d.warmReady(); !ok {
 		return nil, fmt.Errorf("standby not ready: %s", why)
 	}
@@ -544,6 +581,9 @@ func (d *Daemon) hwm() *hwMacs {
 // warmLearn remembers the permanent MAC of the warm devices while it is still visible (an active node carries the shared MAC,
 // ifconfig may not print the permanent one on every driver). Cheap; called now and then on a node that is not standby.
 func (d *Daemon) warmLearn(path string, set IfaceSet) {
+	if d.hotOn() {
+		return // the permanent MAC is never needed: the shared one stays on the devices
+	}
 	p, err := d.warmPlanFor(path)
 	if err != nil || p == nil {
 		return
@@ -557,6 +597,10 @@ func (d *Daemon) warmLearn(path string, set IfaceSet) {
 // uses the classic path.
 func (d *Daemon) warmChecks() []Check {
 	var cs []Check
+	mode := "warm standby"
+	if d.hotOn() {
+		mode = "hot standby"
+	}
 	d.wst.mu.Lock()
 	warm, classic := append([]string(nil), d.wst.warm...), append([]string(nil), d.wst.classic...)
 	d.wst.mu.Unlock()
@@ -566,19 +610,19 @@ func (d *Daemon) warmChecks() []Check {
 		_, _, peer := d.hb.Snapshot()
 		switch peer.Warm {
 		case "ready":
-			cs = append(cs, pass("warm standby", "the standby is ready for a fast takeover"))
+			cs = append(cs, pass(mode, "the standby is ready for a fast takeover"))
 		case "":
-			cs = append(cs, warn("warm standby", "the peer runs in classic mode (or has not reported yet): set the same mode on both firewalls"))
+			cs = append(cs, warn(mode, "the peer runs in classic mode (or has not reported yet): set the same mode on both firewalls"))
 		default:
-			cs = append(cs, warn("warm standby", "the standby is not ready, a takeover would use the classic path: "+peer.Warm))
+			cs = append(cs, warn(mode, "the standby is not ready, a takeover would use the classic path: "+peer.Warm))
 		}
 	} else if ok, why := d.warmReady(); ok {
-		cs = append(cs, pass("warm standby", fmt.Sprintf("ready: %s up and silent", strings.Join(warm, ", "))))
+		cs = append(cs, pass(mode, fmt.Sprintf("ready: %s up and silent", strings.Join(warm, ", "))))
 	} else {
-		cs = append(cs, warn("warm standby", "not ready, a takeover would use the classic path: "+why))
+		cs = append(cs, warn(mode, "not ready, a takeover would use the classic path: "+why))
 	}
 	if len(classic) > 0 {
-		cs = append(cs, warn("warm standby: classic interfaces", "these interfaces keep the classic takeover: "+strings.Join(classic, "; ")))
+		cs = append(cs, warn(mode+": classic interfaces", "these interfaces keep the classic takeover: "+strings.Join(classic, "; ")))
 	}
 	return cs
 }

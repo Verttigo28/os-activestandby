@@ -69,7 +69,38 @@ What it means:
 * On the X710 the classic standby does not renegotiate at all (the link stays active while the port is down), so the "up to 8 s of carrier wait" that motivated the warm standby does not apply to this hardware.
 * **Recommendation: keep the classic mode here.** The warm standby stays in the code, off by default, for hardware where a measurement shows a gain; with a LAGG (as in the production layout of this machine) it does not apply anyway.
 
-A variant that would avoid the bounce, a standby that already holds the shared MAC while staying completely silent, was not built: it contradicts the rule "never the same MAC on two active ports", needs the firmware LLDP agent of the X710 off (`fw_lldp=0`, it is on by default and would transmit with the shared MAC), and relies on the switch never seeing a frame from the standby. It needs a decision and a hardware test, not a guess.
+The variant that avoids the bounce, a standby that already holds the shared MAC while staying completely silent, is the hot standby below. The worry that the firmware LLDP agent of the X710 would transmit with the shared MAC was measured and does not hold: it uses the permanent MAC of the port.
+
+## Hot standby (0.9.3): the takeover that adds addresses and nothing else
+
+The warm standby above takes the shared MAC at the takeover, and on these NICs that costs a link event. The **hot standby** (setting *Standby mode* = Hot) moves that cost to the moment the node becomes standby, when nobody waits for it:
+
+| | Standby (silent) | Takeover | Stand down |
+|---|---|---|---|
+| Classic | ports down | bring up the links, PHP per interface (3.1-3.8 s with 21 interfaces) | ports down |
+| Warm | ports up, **own** MAC, no address | MAC change (link drop on the X710), addresses | MAC back, addresses off |
+| **Hot** | LAGG, its ports and the VLANs **up, shared MAC, no address, IPv6 off** | **addresses only (176-222 ms for 21 interfaces), announce** | addresses off |
+
+**Why a standby with the shared MAC is silent.** A port with a MAC and no address sends nothing with it: no ARP, no ND, no MLD (IPv6 is switched off *before* the port comes up). Measured with the switch as observer: LAGG and both X710 ports up with the shared MAC for 45 s, 2381 frames, all LLDP from the firmware agent with the **permanent** MAC of the port; none with the shared MAC; the switch kept the shared MAC on the active node's port. Because another NIC may behave differently, the daemon **watches the software transmit counter** of every silent interface of the standby: one that transmits is shut down at once, the standby reports "not ready" and the takeover is classic. It also checks that the packet filter of the standby has its default deny (without it a frame for the shared MAC would be routed). An LACP LAGG is exempt from the transmit watch (it sends LACPDUs, link-local frames that a bridge neither forwards nor learns); its VLANs are not.
+
+**What qualifies.** Interfaces with a static IPv4 address (IP aliases and a static IPv6 address are fine), a shared MAC, on a NIC, a VLAN or a LAGG (failover, load balance, round robin, LACP with the setting below). DHCP, PPPoE, an MTU, bridges, GRE/GIF and other virtual IP types keep the classic takeover (the plan says why, in the pre-flight and the status). Any problem at the takeover (an interface not in the silent state, a command that fails, an address that does not appear) undoes what was done and uses the classic path.
+
+**LACP.** The standby's LAGG runs LACP with the **shared MAC as system id**, so the takeover finds its bundle already established. This needs a switch with **one static port-channel per firewall**; a switch that aggregates dynamically by the partner system id would merge both firewalls into one LAG. Setting *Hot standby with an LACP LAGG*: *Off* (default) keeps the classic takeover for an interface directly on an LACP LAGG and for the VLANs on it, *Shared* is the fast one. VLANs on an LACP LAGG that is **not** an interface are hot in both cases (the LAGG keeps its own MAC and runs promiscuous so that it accepts the VLAN MAC). Tested against two RouterOS 802.3ad bonds (1 s LACP rate): two separate bonds, both with the shared MAC as partner system id, both fully active.
+
+**Measured** (two Supermicro machines, X710, MikroTik switch; two ports per firewall; the client pings every 20 ms through the switch; [validation](validation.md) section J3):
+
+| Scenario | Classic, failover LAGG | Classic, **LACP** | **Hot**, failover LAGG | **Hot, LACP** (shared) |
+|---|---|---|---|---|
+| Promotion (21 interfaces) | 3.1-3.8 s | 2.3-3.2 s | **176-222 ms** | **176-222 ms** |
+| Graceful failover, client view | 1.0 s | **12.5 s** | **0.12-0.16 s** | **0.10-0.18 s** |
+| Crash of the active node | 4.9 s | 9.6 s | **2.8 s** | **3.0 s** (3 s of it is the detection time) |
+| Dead card (both ports cut) | 5.1 s | not measured | not measured | **3.1 s** (2 s hold) |
+
+**Limits.** The ruleset on the standby is the one it had when it last was active: a rule added or removed on the active node since reaches the standby's packet filter only at the authoritative reload during the takeover (1-2 s in), and established connections pass on the pfsync states anyway. A new connection during the first moments of a takeover is judged by the standby's last ruleset. The mode is experimental and off by default: validate it on your hardware first (`lab/`, section J3 of the validation), in particular that the NIC does not transmit with the OS MAC while silent (the daemon will tell you).
+
+### Compared with CARP (from the design of both, not measured here)
+
+CARP gives each shared address a virtual MAC (00:00:5e:00:01:VHID) and an advertisement every `advbase` seconds; the backup takes over after about `3 x advbase + advskew/256` seconds without advertisement (3-4 s at advbase 1, advskew 0), then OPNsense runs its CARP status scripts, which reconfigure services (typically a few more seconds). So expect roughly **3 to 6 s** for a node failure, and nothing faster than the advertisement timers whatever the hardware. It needs one virtual IP per subnet plus a real address on each node (three addresses per subnet), the configuration synchronisation goes through XML-RPC, and the states through pfsync as here. This plugin keeps a single address per interface and the same MAC on both nodes (no client has to learn anything), detects with its own heartbeat (3 s by default, 1 s minimum) and, in hot mode, takes over in about 0.2 s once the failure is detected: **a crash is served again after about 3 s, a manual or health-driven switch after 0.1-0.2 s**.
 
 ## Where the time goes (what to measure)
 
@@ -85,7 +116,7 @@ Each promotion records its phases (offset in ms) and, for an automatic one, `det
 
 ## Next steps with real data
 
-0. **What is left in the classic promotion** (measured, section J2): the LAGG 0.5-1.8 s (the X710 re-initialises when its MAC changes, which no software can avoid), routes 0.2-0.7 s (now overlapped with the carrier wait), the ruleset 0.7-1.5 s (now overlapped with the interfaces), the VLANs 0.06-0.14 s (native). A standby that keeps the LAGG ports up with the shared MAC would remove the LAGG time (measured silent on the X710, see J2) but cannot work with LACP.
+0. **What is left in the classic promotion** (measured, section J2): the LAGG 0.5-1.8 s (the X710 re-initialises when its MAC changes, which no software can avoid), routes 0.2-0.7 s (now overlapped with the carrier wait), the ruleset 0.7-1.5 s (now overlapped with the interfaces), the VLANs 0.06-0.14 s (native). The hot standby (below) removes the LAGG time by keeping the LAGG up with the shared MAC.
 1. Run section H of `docs/validation.md` on the target pair (Classic and Warm, several runs each) and compare median, P95 and maximum.
 2. From the phases decide what still costs time: if it is routes or `filter reload`, run them natively or in parallel; if the switch learns slowly, add more announcements or a different frame.
 3. Decide whether OPNsense's interface state needs a reconcile step after the fast path, and what it may safely run without a link flap.

@@ -200,8 +200,8 @@
                 $('#bannerMaint').toggle(!!s.maintenance);
                 const problems = [];
                 if (s.degraded) { problems.push('{{ lang._('Active but degraded') }}: ' + s.degraded); }
-                if (s.warm && s.warm.mode === 'warm' && s.state === 'standby' && !s.warm.ready) { problems.push('{{ lang._('Warm standby not ready, a takeover would use the classic path') }}: ' + (s.warm.reason || '')); }
-                if (s.warm && s.warm.mode === 'warm' && s.state === 'active' && s.peer_warm && s.peer_warm !== 'ready') { problems.push('{{ lang._('The standby is not ready for a warm takeover') }}: ' + s.peer_warm); }
+                if (s.warm && (s.warm.mode === 'warm' || s.warm.mode === 'hot') && s.state === 'standby' && !s.warm.ready) { problems.push('{{ lang._('Warm standby not ready, a takeover would use the classic path') }}: ' + (s.warm.reason || '')); }
+                if (s.warm && (s.warm.mode === 'warm' || s.warm.mode === 'hot') && s.state === 'active' && s.peer_warm && s.peer_warm !== 'ready') { problems.push('{{ lang._('The standby is not ready for a warm takeover') }}: ' + s.peer_warm); }
                 if (s.health) { problems.push('{{ lang._('Health problem on the active node') }}: ' + s.health); }
                 if (s.drift) { problems.push('{{ lang._('Configuration drift') }}: ' + s.drift); }
                 if (s.pfsync_problem) { problems.push('{{ lang._('State synchronisation (pfsync)') }}: ' + s.pfsync_problem); }
