@@ -256,6 +256,7 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		out, err := sh(reconfScript, "dns")
 		log.Printf("  dhcp+dns restart: %dms err=%v out=%q", time.Since(t1).Milliseconds(), err, out)
 		restartBoundServices()
+		d.startStoppedServices()
 	}()
 	ph.mark("pf reloaded, services started")
 	d.event("change", "promoted to ACTIVE (%s) in %d ms", reason, time.Since(t0).Milliseconds())

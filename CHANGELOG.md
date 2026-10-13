@@ -2,6 +2,11 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 1.0.1
+### Fixed
+- **Plugin services were not started on the node that becomes active.** Only NTP, captive portal, Suricata, HAProxy and Dynamic DNS were restarted after a takeover. A service that is enabled in the replicated configuration but was never started on the standby (net-snmp, node exporter, LLDP, ...) stayed stopped on the new active node: found on the test pair after replicating the settings of a pfSense, where none of the three ran after the first failover. After a takeover every service listed by `pluginctl -S` that is enabled and not running is now started (IPsec, OpenVPN, WireGuard, the gateway monitor, DHCP and DNS keep their own handling). The standby had not always regenerated the templates of the plugins either (`/etc/rc.conf.d/snmpd` still said `NO`, so starting the service did nothing): they are regenerated first. Not present in 1.0.0.
+- **Pre-flight "standby silence" is aware of the hot standby.** In hot mode the data devices are up on purpose with the shared MAC; the check reported them as a failure. It now requires, for a hot standby, up + no address + IPv6 off + the shared MAC (the transmit watch and the default-deny check remain the guarantee).
+
 ## 1.0.0
 First release meant for production use (starting with a small data centre). Everything below was measured on two Supermicro machines with Intel X710, a real switch and real LACP bonds ([validation](docs/validation.md) sections J to J4); the hot standby stays experimental and off by default, the classic mode is the default and the reference.
 

@@ -189,9 +189,15 @@ func (d *Daemon) localChecks() []Check {
 					continue
 				}
 				if shared, ok := warm[dev]; ok {
-					// warm standby: up is expected, but only silent: own MAC, no address, IPv6 off
 					st := d.readIf(dev)
-					if hw, known := d.hwm().resolve(dev, shared, st); known && st.silent(hw) {
+					if d.hotOn() {
+						// hot standby: up with the shared MAC is expected, but silent: no address, IPv6 off (the transmit
+						// watch and the default-deny check of the hot standby cover the rest)
+						if st.silentHot(shared) {
+							continue
+						}
+					} else if hw, known := d.hwm().resolve(dev, shared, st); known && st.silent(hw) {
+						// warm standby: up is expected, but only silent: own MAC, no address, IPv6 off
 						continue
 					}
 				}
@@ -200,6 +206,8 @@ func (d *Daemon) localChecks() []Check {
 			switch {
 			case len(loud) > 0:
 				cs = append(cs, fail("standby silence", "data devices are up on the standby: "+strings.Join(loud, ", ")))
+			case len(warm) > 0 && d.hotOn():
+				cs = append(cs, pass("standby silence", "data devices are up and silent (shared MAC, no address, IPv6 off) in hot standby"))
 			case len(warm) > 0:
 				cs = append(cs, pass("standby silence", "data devices are down, or up and silent (own MAC, no address) in warm standby"))
 			default:
