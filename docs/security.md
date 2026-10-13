@@ -104,3 +104,7 @@ Each node creates a self-signed ECDSA P-256 certificate on first start, valid fo
 ### pfsync
 
 pfsync carries the firewall states (addresses, ports, sequence numbers) in the clear and without authentication beyond the network it runs on. It is not encrypted by this plugin and none is added: use a dedicated cable for the HA link, or an IPsec-protected link between the nodes, and a firewall rule on the HA interface that allows only the peer. Anyone who can write on that link can inject states into the other node.
+
+### Go toolchain (found by `govulncheck` in the CI, 2026-10-13)
+
+Releases up to and including 1.0.1 were built with Go 1.27.0, which has nine standard-library vulnerabilities that the daemon reaches through the peer API (`net/http` and its HTTP/2 server: GO-2026-6603, 6605, 6607, 6608, 6610, 6611, 6612, 6613, 6617: denial of service by a crafted HTTP/2 stream, request desynchronisation, a TLS ECH parsing issue). All are fixed in Go 1.27.2, which builds 1.0.2 and later. The peer API only accepts a connection that presents the pinned certificate of the other node, so the reach is limited to a holder of that key or to someone who can already speak TLS to the port before the pin is checked; upgrade the plugin on both nodes anyway.

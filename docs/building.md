@@ -12,7 +12,7 @@ lab/                           Hyper-V lab tooling and notes (not part of the pa
 ```
 
 ## Build the package
-Anywhere with Go 1.22 or newer (`go.mod` language level; CI builds and tests with 1.27.0, use that for a release) and a FreeBSD/OPNsense host to run `pkg create` (any OPNsense node works, e.g. a spare VM):
+Anywhere with Go 1.22 or newer (`go.mod` language level; CI builds and tests with 1.27.2 (Go before 1.27.2 has standard-library vulnerabilities that this daemon reaches), use that or newer for a release) and a FreeBSD/OPNsense host to run `pkg create` (any OPNsense node works, e.g. a spare VM):
 ```powershell
 .\build\build.ps1 -Version 1.0.2 -BuildNode peer      # lab shortcut; produces dist\os-activestandby-<version>.pkg
 ```

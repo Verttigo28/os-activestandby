@@ -9,6 +9,7 @@ All notable changes. Versions follow `vX.Y.Z` tags; the package version comes fr
 - **`/v1/config`**: revision and checksum headers are required and strictly parsed.
 - **Services after a takeover** are verified; a failure marks the node degraded.
 - **New option `fence_required`** (Settings > Safety, off by default): no automatic takeover caused by a silent peer without a fencing command that succeeds.
+- **Go 1.27.2**: `govulncheck` found nine standard-library vulnerabilities (net/http, HTTP/2, crypto/tls) in the Go 1.27.0 that built every earlier release; all fixed in 1.27.2, which now builds the daemon (see [security](docs/security.md)).
 - **CI**: ShellCheck is blocking and covers every script (all findings fixed or justified); `govulncheck`, `go mod verify`, a reproducible-build check, a package smoke test, attestation and checksum of the daemon binary.
 - **Documentation**: repository name in the install and verification commands, file names, build section, certificate rotation, pfsync exposure, the limit without fencing at the top of the README.
 ### Tests
