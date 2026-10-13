@@ -23,7 +23,7 @@ jobs:
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
           staticcheck ./...
-      - name: vulnerabilities (the code has no dependency: this checks the standard library of the Go that builds it)
+      - name: vulnerabilities (no dependency, so this is the standard library of the Go that builds it)
         working-directory: daemon
         run: |
           go mod verify
@@ -44,7 +44,7 @@ jobs:
           case "$GITHUB_REF" in refs/tags/v*) V="${GITHUB_REF_NAME#v}";; esac
           case "$V" in *[!0-9A-Za-z.+-]*) echo "refusing odd version string"; exit 1;; esac
           go build -trimpath -ldflags "-s -w -X main.version=$V" -o ../src/sbin/hasyncd .
-      - name: the build is reproducible (same source, same flags, empty cache: same bytes)
+      - name: the build is reproducible (same source, same flags, empty cache, same bytes)
         working-directory: daemon
         env: { GOOS: freebsd, GOARCH: amd64, CGO_ENABLED: '0' }
         run: |
