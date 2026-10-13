@@ -171,6 +171,8 @@ func (h *fakeHost) sh(name string, args ...string) (string, error) {
 			case "-ifdisabled":
 				d.nd6off = false
 				rest = rest[2:]
+			case "-accept_rtadv", "accept_rtadv":
+				rest = rest[2:]
 			default:
 				ip := strings.SplitN(rest[1], "/", 2)[0]
 				rest = rest[2:]
@@ -181,6 +183,8 @@ func (h *fakeHost) sh(name string, args ...string) (string, error) {
 					d.inet6 = append(without(d.inet6, ip), ip)
 				}
 			}
+		case "-no_dad", "no_dad":
+			rest = rest[1:]
 		case "-promisc":
 			d.promisc = false
 			rest = rest[1:]
@@ -193,7 +197,7 @@ func (h *fakeHost) sh(name string, args ...string) (string, error) {
 		case "down":
 			d.up = false
 			rest = rest[1:]
-		case "mtu":
+		case "mtu", "description":
 			rest = rest[2:]
 		default:
 			return "", fmt.Errorf("unexpected ifconfig argument %q", rest[0])

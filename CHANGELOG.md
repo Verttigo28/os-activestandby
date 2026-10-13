@@ -2,6 +2,19 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 0.9.2
+Measured on the two Supermicro machines with the MikroTik switch as client (`docs/validation.md` section J2).
+
+### A faster takeover
+- **VLANs are brought up with one `ifconfig` each instead of the PHP interface code** (setting *Fast interface takeover*, on by default). For a VLAN with a static IPv4 address and IP aliases OPNsense's code does nothing else (it skips the hardware offload settings for VLAN devices), so 20 VLANs now take 0.06-0.14 s instead of 2.3 s. The physical NICs and the LAGG, DHCP/IPv6/MTU interfaces, anything with bridges, GRE/GIF or static ARP entries in the configuration, and any VLAN that does not come up as planned keep using the stock code. The plan comes from `ifaces.php plan` and is checked again in Go before it reaches `ifconfig`.
+- **The ruleset is generated while the interfaces come up** instead of after them; the authoritative reload after routes and gateways is unchanged (and a failed promotion puts the ruleset of the standby view back). Routes and gateway monitoring run during the carrier wait.
+- **A monitored link that lost its carrier counts after a third of the hold time, at least 2 s** (was the whole 6 s); services and probes keep the full hold. While a problem is pending the health loop runs every 0.5 s instead of 2 s (with a 2 s hold the 2 s tick was a coin flip between 2 and 4 s).
+- Measured: promotion 3.1-3.8 s with 21 interfaces, graceful failover 1.0 s seen by a client, crash of the active node 4.9 s, dead card 5.1 s (0.9.1: 4.4-4.9 s, 5.9 s, 8.4 s, 11.9 s).
+
+### Operations
+- The data ports of the switch must be **edge/portfast**: with RSTP auto-detection a port whose link returns waits about 3 s, which was 3-4 s of extra outage after every takeover in the lab.
+- The help of *Promiscuous mode on data interfaces* no longer says that real NICs never need it.
+
 ## 0.9.1
 Found on real hardware (two Supermicro machines, Intel X710, a MikroTik switch as traffic generator, 20 VLANs on a LAGG, the production configuration).
 

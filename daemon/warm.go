@@ -48,6 +48,14 @@ type WarmIface struct {
 	Parent   string   `json:"parent"`
 	Eligible bool     `json:"eligible"`
 	Reason   string   `json:"reason"`
+
+	// fast classic takeover (fastpath.go): a VLAN with a static IPv4 address, independent of the warm eligibility
+	Fast    bool   `json:"fast"`
+	FastWhy string `json:"fast_why"`
+	FastV4  string `json:"fast_v4"`  // address/prefix
+	FastMAC string `json:"fast_mac"` // the interface's MAC from the configuration, "" when none is set
+	Descr   string `json:"descr"`    // interface description, as OPNsense prints it
+	Promisc bool   `json:"promisc"`  // the interface has the promiscuous option
 }
 
 type WarmPlan struct {
@@ -293,6 +301,11 @@ func (d *Daemon) warmPlanFor(path string) (*WarmPlan, error) {
 	if !d.warmOn() {
 		return nil, nil
 	}
+	return d.planFor(path)
+}
+
+// planFor returns the plan of the full configuration (cached by file time), whatever the standby mode.
+func (d *Daemon) planFor(path string) (*WarmPlan, error) {
 	if d.act != nil && d.act.plan != nil {
 		p, err := d.act.plan(path)
 		p = sanitize(p)

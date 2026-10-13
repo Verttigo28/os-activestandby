@@ -34,6 +34,10 @@
                     <warm>Warm standby (experimental: interfaces up and silent)</warm>
                 </OptionValues>
             </ha_mode>
+            <fast_ifaces type="BooleanField">
+                <Default>1</Default>
+                <Required>Y</Required>
+            </fast_ifaces>
             <force_promisc type="BooleanField">
                 <Default>0</Default>
                 <Required>Y</Required>

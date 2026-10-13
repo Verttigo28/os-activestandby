@@ -17,7 +17,7 @@ import (
 )
 
 // version is set at build time (-ldflags "-X main.version=...") by CI and build/build.ps1.
-var version = "0.9.1"
+var version = "0.9.2"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`
@@ -26,6 +26,7 @@ type Config struct {
 	AutoFailover *bool  `json:"auto_failover"`
 	AllowHAOnly  bool   `json:"allow_ha_only_promote"`
 	ForcePromisc bool   `json:"force_promisc"`
+	FastIfaces   *bool  `json:"fast_ifaces"` // bring static VLANs up natively at a takeover (default on, see fastpath.go)
 
 	NotifyLevel      string `json:"notify_level"`
 	NotifyWebhook    string `json:"notify_webhook"`
@@ -46,6 +47,7 @@ type Config struct {
 
 func (c Config) autoOn() bool       { return c.AutoFailover == nil || *c.AutoFailover }
 func (c Config) syncSessions() bool { return c.SyncSessions == nil || *c.SyncSessions }
+func (c Config) fastOn() bool       { return c.FastIfaces == nil || *c.FastIfaces }
 
 type Daemon struct {
 	cfg           Config

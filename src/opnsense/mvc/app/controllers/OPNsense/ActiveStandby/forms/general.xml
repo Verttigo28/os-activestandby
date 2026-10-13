@@ -99,7 +99,7 @@
         <label>Local health-failure hold time (seconds)</label>
         <type>text</type>
         <advanced>true</advanced>
-        <help>How long a health problem (link, service, probe) must persist on the active firewall before the roles are switched.</help>
+        <help>How long a health problem must persist on the active firewall before the roles are switched. A monitored link that lost its carrier counts after a third of it (at least 2 s): a dead card does not come back; services and probe targets use the whole time.</help>
     </field>
 
     <field>
@@ -126,11 +126,18 @@
         <help>Classic: the standby keeps its data interfaces down; a takeover brings the links up (a real NIC needs seconds to renegotiate). Warm (experimental): the standby keeps the links of its shared interfaces up with its own MAC address, no IP address and IPv6 off, and takes the shared MAC and addresses at takeover. Only interfaces with a static IPv4 address, a shared MAC and a plain NIC or VLAN qualify; the others keep the classic takeover, and any problem falls back to it. Needs a switch that accepts two MAC addresses on the port group and a NIC driver that changes its MAC without dropping the link: validate on your hardware first (docs/fast-ha.md). Copied from the active firewall: it is the same on both.</help>
     </field>
     <field>
+        <id>activestandby.general.fast_ifaces</id>
+        <label>Fast interface takeover</label>
+        <type>checkbox</type>
+        <advanced>true</advanced>
+        <help>At a takeover, VLANs with a static IPv4 address (and IP aliases) are brought up with a single ifconfig instead of the PHP interface code, about 2 s faster with 20 VLANs. Anything else (the LAGG, physical NICs, DHCP, IPv6, an MTU, bridges, GRE/GIF, static ARP entries) still uses the stock code, and a VLAN that does not come up as planned falls back to it. Copied from the active firewall.</help>
+    </field>
+    <field>
         <id>activestandby.general.force_promisc</id>
         <label>Promiscuous mode on data interfaces</label>
         <type>checkbox</type>
         <advanced>true</advanced>
-        <help>Needed on virtual NICs (Hyper-V, some virtio setups) whose driver does not reprogram its receive filter when the shared MAC is applied. Real NICs (Intel ixl, igb, ...) do not need it.</help>
+        <help>Needed on virtual NICs (Hyper-V, some virtio setups) whose driver does not reprogram its receive filter when the shared MAC is applied. Real NICs (Intel ixl, igb, ...) do not need it for the shared MAC; a VLAN that carries another MAC than its parent needs it on any NIC, and the daemon then sets it by itself.</help>
     </field>
 
     <field>

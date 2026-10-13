@@ -38,6 +38,7 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		return err
 	}
 	// from here on a failure must not leave the full config (shared IPs/MACs) on a node that stays standby
+	earlyStarted := false // the full ruleset is loaded before the interfaces are up (below)
 	defer func() {
 		if retErr != nil && d.store.Get().State != StateActive {
 			log.Printf("promote failed (%v): back to the standby view", retErr)
@@ -46,6 +47,9 @@ func (d *Daemon) promote(reason string) (retErr error) {
 			}
 			d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 			d.enforceOnce()
+			if earlyStarted {
+				sh("configctl", "filter", "reload") // the ruleset of the standby view again
+			}
 		}
 	}()
 	ph.mark("full config restored")
@@ -77,6 +81,16 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		}
 	}
 	ph.mark("virtual devices ready")
+	// The ruleset is generated (about 0.7 s of PHP) while the interfaces come up, instead of after them: new connections only
+	// pass once pf has the ruleset of the active node, established ones already pass on the states pfsync replicated. The
+	// authoritative reload below still runs after routes, gateways and addresses exist (a rule that depends on them is then
+	// regenerated); until then this is the same ruleset the node will keep, loaded a second or two earlier.
+	var earlyPF chan error
+	if d.cfg.fastOn() {
+		earlyPF = make(chan error, 1)
+		earlyStarted = true
+		go func() { earlyPF <- reloadFilter() }()
+	}
 	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 	var firstErr error
 	// warm standby: the eligible interfaces take the shared identity natively (MAC, addresses); the others, and everything
@@ -110,6 +124,14 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		if len(group) == 0 {
 			continue
 		}
+		if total := len(group); n >= 2 { // the VLANs and what sits on them: the stock code is skipped for those the plan marks "fast" (fastpath.go)
+			if group = d.fastTier(full, group); len(group) < total {
+				ph.mark(fmt.Sprintf("tier %d: %d interface(s) brought up natively", n, total-len(group)))
+			}
+			if len(group) == 0 {
+				continue
+			}
+		}
 		var rw sync.WaitGroup
 		var emu sync.Mutex
 		for _, i := range group {
@@ -131,12 +153,18 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		rw.Wait()
 		ph.mark(fmt.Sprintf("tier %d: %d interface(s) configured", n, len(group)))
 	}
-	if out, err := sh(reconfScript, "routes"); err != nil {
-		log.Printf("promote: routes: %v: %s", err, out)
-		d.markDegraded("static routes could not be restored (%v): %s", err, out)
-	}
+	// routes and gateway monitoring (0.3-0.8 s) need the addresses only: they run while the links settle and the switch is told
+	routesDone := make(chan struct{})
+	go func() {
+		defer close(routesDone)
+		if out, err := sh(reconfScript, "routes"); err != nil {
+			log.Printf("promote: routes: %v: %s", err, out)
+			d.markDegraded("static routes could not be restored (%v): %s", err, out)
+		}
+	}()
 	ph.mark("interfaces reconfigured")
 	if firstErr != nil {
+		<-routesDone
 		return firstErr
 	}
 	// some virtual NIC drivers keep their hardware receive filter when the lladdr changes; a VLAN with a MAC of its own
@@ -165,6 +193,15 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		announce(i.Dev)
 	}
 	ph.mark("gratuitous ARP sent")
+	if earlyPF != nil {
+		if err := <-earlyPF; err != nil {
+			log.Printf("promote: early ruleset not loaded (%v), the reload after the interfaces decides", err)
+		} else {
+			ph.mark("packet filter loaded (early)")
+		}
+	}
+	<-routesDone
+	ph.mark("routes and gateway monitoring ready")
 	// pf and the services do not depend on each other: run them side by side
 	var wg sync.WaitGroup
 	run := func(c ...string) {

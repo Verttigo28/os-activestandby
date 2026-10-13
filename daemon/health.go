@@ -16,22 +16,23 @@ import (
 // at most two health switches in 30 minutes and a 5 minute cool-down.
 
 type healthState struct {
-	mu           sync.Mutex
-	failSince    map[string]time.Time
-	reasons      []string
-	cooldown     time.Time
-	switches     []time.Time
-	lastRestart  map[string]time.Time
-	warned       map[string]bool
-	links        map[string]bool // carrier of this node's data devices whose state can be read, sent in every heartbeat
-	linksUnknown []string        // data devices whose state cannot be read (administratively down and no carrier: a standby port)
-	graceUntil   time.Time       // no health switching right after a promote (DHCP/PPPoE WAN, gateways, services still coming up)
-	devMu        sync.Mutex
-	devPath      string
-	devMtime     time.Time
-	devSet       IfaceSet
-	mgmtBad      int    // consecutive failed management probes
-	mgmtMsg      string // last failure message
+	mu            sync.Mutex
+	failSince     map[string]time.Time
+	reasons       []string
+	cooldown      time.Time
+	switches      []time.Time
+	lastRestart   map[string]time.Time
+	warned        map[string]bool
+	links         map[string]bool // carrier of this node's data devices whose state can be read, sent in every heartbeat
+	linksUnknown  []string        // data devices whose state cannot be read (administratively down and no carrier: a standby port)
+	graceUntil    time.Time       // no health switching right after a promote (DHCP/PPPoE WAN, gateways, services still coming up)
+	devMu         sync.Mutex
+	devPath       string
+	devMtime      time.Time
+	devSet        IfaceSet
+	mgmtBad       int    // consecutive failed management probes
+	mgmtMsg       string // last failure message
+	lastMgmtProbe time.Time
 }
 
 func newHealthState() *healthState {
@@ -84,9 +85,18 @@ func (d *Daemon) healthReason() string {
 	return strings.Join(d.health.reasons, "; ")
 }
 
+// healthLoop: every 2 s; every 0.5 s while a problem is pending, so that the hold time (2 s at the shortest) is met within
+// half a second of its end instead of at the next 2 s tick (which, with a 2 s hold, was a coin flip between 2 and 4 s).
 func (d *Daemon) healthLoop() {
-	for range time.Tick(2 * time.Second) {
+	for {
 		d.healthStep()
+		wait := 2 * time.Second
+		d.health.mu.Lock()
+		if len(d.health.failSince) > 0 {
+			wait = 500 * time.Millisecond
+		}
+		d.health.mu.Unlock()
+		time.Sleep(wait)
 	}
 }
 
@@ -122,7 +132,10 @@ func (d *Daemon) healthStep() {
 	h.mu.Lock()
 	h.links, h.linksUnknown = links, unknown
 	h.mu.Unlock()
-	d.mgmtProbeStep()
+	if time.Since(h.lastMgmtProbe) >= 1900*time.Millisecond { // the probe pings: never faster than every 2 s, whatever the tick
+		h.lastMgmtProbe = time.Now()
+		d.mgmtProbeStep()
+	}
 
 	h.mu.Lock()
 	inGrace := time.Now().Before(h.graceUntil)
@@ -171,7 +184,7 @@ func (d *Daemon) healthStep() {
 			go d.event("warning", "health problem on the active node: %s", desc)
 		}
 		reasons = append(reasons, desc)
-		if now.Sub(h.failSince[id]) >= hold {
+		if now.Sub(h.failSince[id]) >= holdFor(id, hold) {
 			due = append(due, id)
 		}
 	}
@@ -182,6 +195,16 @@ func (d *Daemon) healthStep() {
 		return
 	}
 	d.healthSwitch(due, failures)
+}
+
+// holdFor: a monitored link that lost its carrier is hard evidence (a dead card, a pulled cable, a switch that went away), so it
+// is acted on after a third of the hold time, at least 2 s: the hold exists to ride out a flap, not to wait for a card that is
+// gone. Services and probe targets keep the whole hold (they may only be restarting).
+func holdFor(id string, hold time.Duration) time.Duration {
+	if strings.HasPrefix(id, "link:") {
+		return max(hold/3, 2*time.Second)
+	}
+	return hold
 }
 
 func (d *Daemon) healthSwitch(due []string, failures map[string]string) {

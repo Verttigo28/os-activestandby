@@ -85,7 +85,7 @@ Each promotion records its phases (offset in ms) and, for an automatic one, `det
 
 ## Next steps with real data
 
-0. **What is left in the classic promotion** (measured): the 20 VLANs cost 2.3 s because OPNsense's `interface_configure()` is CPU bound (`legacy_interfaces_details()` parses all interfaces for each one; one process or twenty give the same time). A native `ifconfig` path for static IPv4 VLANs (what the warm code does) would take this to a few hundred ms, but must reproduce the offload settings (`-tso -lro`) OPNsense applies per device, otherwise forwarding breaks; the pf reload (0.8 s) could be loaded before the interfaces are configured, but its generation depends on the gateway state that the routes step creates. Both need a decision and a test, not a guess.
+0. **What is left in the classic promotion** (measured, section J2): the LAGG 0.5-1.8 s (the X710 re-initialises when its MAC changes, which no software can avoid), routes 0.2-0.7 s (now overlapped with the carrier wait), the ruleset 0.7-1.5 s (now overlapped with the interfaces), the VLANs 0.06-0.14 s (native). A standby that keeps the LAGG ports up with the shared MAC would remove the LAGG time (measured silent on the X710, see J2) but cannot work with LACP.
 1. Run section H of `docs/validation.md` on the target pair (Classic and Warm, several runs each) and compare median, P95 and maximum.
 2. From the phases decide what still costs time: if it is routes or `filter reload`, run them natively or in parallel; if the switch learns slowly, add more announcements or a different frame.
 3. Decide whether OPNsense's interface state needs a reconcile step after the fast path, and what it may safely run without a link flap.

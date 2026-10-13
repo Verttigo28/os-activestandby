@@ -79,11 +79,27 @@ function warmPlan(SimpleXMLElement $cfg): array
     foreach ($cfg->virtualip->vip ?? [] as $v) {
         $k = (string)$v->interface;
         if ((string)$v->mode === 'ipalias' && filter_var((string)$v->subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false
-            && (int)$v->subnet_bits >= 1 && (int)$v->subnet_bits <= 32) {
+            && (int)$v->subnet_bits >= 1 && (int)$v->subnet_bits <= 32 && (string)$v->gateway === '' && (string)$v->vhid === '') {
             $vips[$k][] = (string)$v->subnet . '/' . (int)$v->subnet_bits;
         } else {
             $badVip[$k] = (string)$v->mode;
         }
+    }
+    /*
+     * Fast classic takeover ("fast"): a VLAN with a static IPv4 address (and IP aliases) is brought up with one ifconfig
+     * instead of the PHP interface code. OPNsense's own code does nothing else for such a VLAN: it skips the hardware
+     * offload settings for VLAN devices (_interfaces_hardware), and the rest (routes, DHCP, DNS, pf) runs once afterwards
+     * as before. Anything that interface_configure() would additionally do keeps the PHP path: bridges, GRE/GIF, static
+     * ARP/NDP entries (neighbors) anywhere in the configuration, an MTU, IPv6, DHCP, other virtual IP types.
+     */
+    $fastBlock = '';
+    foreach (['bridges' => 'bridge', 'gres' => 'gre', 'gifs' => 'gif'] as $sec => $item) {
+        if (count($cfg->$sec->$item ?? []) > 0) {
+            $fastBlock = "the configuration has $sec";
+        }
+    }
+    if (count($cfg->OPNsense->Interfaces->neighbors->neighbor ?? []) > 0) {
+        $fastBlock = 'the configuration has static ARP/NDP entries';
     }
     $out = [];
     foreach (dataInterfaces($cfg) as $i) {
@@ -91,6 +107,29 @@ function warmPlan(SimpleXMLElement $cfg): array
         $why = '';
         $v4 = $v6 = '';
         $parent = $vlans[$i['dev']] ?? '';
+        $fv4 = filter_var((string)$node->ipaddr, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false
+            && (int)$node->subnet >= 1 && (int)$node->subnet <= 32 ? (string)$node->ipaddr . '/' . (int)$node->subnet : '';
+        $a6f = (string)$node->ipaddrv6;
+        $fwhy = '';
+        if ($fastBlock !== '') {
+            $fwhy = $fastBlock;
+        } elseif (!$i['enabled']) {
+            $fwhy = 'interface is disabled';
+        } elseif ($parent === '') {
+            $fwhy = 'not a VLAN';
+        } elseif (!preg_match('/^[a-z][a-z0-9_.]{0,30}$/', $i['dev'])) {
+            $fwhy = 'unusable device name';
+        } elseif ($fv4 === '') {
+            $fwhy = 'IPv4 address is not static';
+        } elseif (isset($badVip[$i['key']])) {
+            $fwhy = 'virtual IP of type ' . $badVip[$i['key']] . ' on this interface';
+        } elseif ($a6f !== '' && $a6f !== 'none') {
+            $fwhy = 'IPv6 is configured';
+        } elseif ((int)$node->mtu > 0) {
+            $fwhy = 'an MTU is configured';
+        } elseif ($i['spoofmac'] !== '' && !preg_match('/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i', $i['spoofmac'])) {
+            $fwhy = 'the MAC address is not valid';
+        }
         if (!$i['enabled']) {
             $why = 'interface is disabled';
         } elseif (!preg_match('/^[a-z][a-z0-9_.]{0,30}$/', $i['dev'])) {
@@ -121,7 +160,10 @@ function warmPlan(SimpleXMLElement $cfg): array
             }
         }
         $out[$i['key']] = ['key' => $i['key'], 'dev' => $i['dev'], 'mac' => strtolower($i['spoofmac']), 'mtu' => (int)$node->mtu,
-            'v4' => $v4, 'v6' => $v6, 'vips' => $vips[$i['key']] ?? [], 'parent' => $parent, 'eligible' => $why === '', 'reason' => $why];
+            'v4' => $v4, 'v6' => $v6, 'vips' => $vips[$i['key']] ?? [], 'parent' => $parent, 'eligible' => $why === '', 'reason' => $why,
+            'fast' => $fwhy === '', 'fast_why' => $fwhy, 'fast_v4' => $fv4, 'fast_mac' => strtolower($i['spoofmac']),
+            'descr' => ((string)$node->descr !== '' ? (string)$node->descr : strtoupper($i['key'])) . ' (' . $i['key'] . ')',
+            'promisc' => (string)$node->promisc !== ''];
     }
     // a VLAN is only as warm as its parent: an assigned parent must be eligible itself
     $byDev = [];

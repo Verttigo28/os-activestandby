@@ -104,3 +104,15 @@ func TestHealthSwitchIsLimitedByTheCooldown(t *testing.T) {
 		t.Fatalf("%d switches within the cool-down: a flapping card must not make the roles ping-pong", demotes.Load())
 	}
 }
+
+func TestLinkLossIsActedOnSoonerThanServices(t *testing.T) {
+	if got := holdFor("link:lagg0", 6*time.Second); got != 2*time.Second {
+		t.Fatalf("a link lost for good: %v, want 2s", got)
+	}
+	if got := holdFor("link:lagg0", 30*time.Second); got != 10*time.Second {
+		t.Fatalf("a long configured hold keeps a third of it: %v", got)
+	}
+	if got := holdFor("service:ipsec", 6*time.Second); got != 6*time.Second {
+		t.Fatalf("services keep the whole hold: %v", got)
+	}
+}
