@@ -2,6 +2,31 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 1.0.0
+First release meant for production use (starting with a small data centre). Everything below was measured on two Supermicro machines with Intel X710, a real switch and real LACP bonds ([validation](docs/validation.md) sections J to J4); the hot standby stays experimental and off by default, the classic mode is the default and the reference.
+
+### Ruleset mirror (hot standby)
+- **The standby holds the packet filter ruleset of the active node.** Without it a new connection during a takeover waited about 1 s for the ruleset to be generated (21 connections needed the client's SYN retransmit in the first 0.85 s); with it 2-3 in the first 0.08 s. The active node sends what it has loaded over the pinned TLS connection; the standby checks it (default deny, size, `pfctl -n`), keeps its own pf hostid and limits, loads it, reports its hash in the heartbeat; a change of rules on the active node reaches it within 3 s; if the standby no longer hears its peer after a load it puts its own ruleset back and keeps the mirror off for ten minutes. Pre-flight and status show it.
+
+### Detection time of 1 second
+- **A frozen standby daemon no longer promotes itself with a short detection time.** With `detect_time` 1 a daemon frozen for 1.5 s (a paused VM, a starved host) took the silence it slept through for a dead peer, because the freeze guard still waited 3 s. The guard now follows the detection time. Measured with 1 s: crash served after 1.2 s, no false failover under 80 s of full CPU load on both nodes plus filter reloads plus a ping flood on the HA link; a frozen active daemon (1.6 s) makes the standby take over, as designed. The trade-off and the recommendation are in [fast-ha](docs/fast-ha.md#detection-time-of-1-second).
+
+### Review before 1.0.0 (an independent read of everything since 0.9.1, all findings fixed)
+- **A device that transmitted while silent is latched down** for ten minutes: the first version of the transmit watch brought it back up at the next pass of the enforcer, so a NIC that leaks every few seconds was up with the shared MAC and "ready" most of the time. The watch also runs when another readiness problem exists, and **fails closed** (an unreadable packet filter or counter is a problem, not a pass).
+- The ruleset mirror: the role is checked again after the operations lock was obtained (the old active node could still be sending during a switchover and its ruleset replaced the new active node's); the "peer still heard" check no longer holds the lock (a promotion must not wait for it); a rejected or failed send backs off (3 s doubling to 5 min) and is not made towards a peer that does not run the warm or hot mode; after a failed load the standby no longer claims to hold a mirror; the file read by the active node must be a regular file owned by root that nobody else can write; a ruleset with `include` or `load anchor` is refused.
+- A failed promotion waits for the background ruleset generation and the routes before it restores the standby view (it could be overwritten by a ruleset generated from the full configuration).
+- The heartbeat limit is 64 KiB (was 4 KiB) and the readiness text in it is capped: with many VLANs a long list of problems could have made the peer look dead.
+- Device names of LAGG members and parents are checked before they reach `ifconfig`; the link hold never exceeds the configured hold.
+
+### TCP sessions across a failover (hardware)
+- A long-lived TCP session through the firewalls (iBGP between two VRFs of the switch, keepalive 3 s, hold 9 s) survives a graceful failover and a crash of the active node; flushing the pf states on the new active node resets it, so the test does detect a missing state ([validation](docs/validation.md) section J5).
+
+### Documentation
+- Switch checklist (edge ports, no port security, trusted ARP, storm control, one static port-channel per firewall for LACP, points for Juniper EX4600 and Meraki MS, not tested with the plugin), the procedure to switch the hot standby on and back, the comparison with CARP, the measured tables in the README.
+
+### Tests
+- Native FreeBSD: `go test -race`, `staticcheck`, `go vet`, PHP lint of the changed scripts; unit tests for the mirror (checks, hostid, rollback, busy), the freeze guard, the transmit watch, the LACP exemption.
+
 ## 0.9.3
 Measured on the two Supermicro machines with the MikroTik switch, with LACP bonds ([validation](docs/validation.md) section J3).
 

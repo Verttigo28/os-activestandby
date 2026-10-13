@@ -1,12 +1,12 @@
 # os-activestandby
 
 **Active/standby high availability for OPNsense, in the style of SonicWall HA.**
-One IP and one MAC per interface, shared by two firewalls. The standby sits silent with its data interfaces down and takes over in about a second.
+One IP and one MAC per interface, shared by two firewalls. The standby sits silent and takes over in **0.1-0.2 s for a planned switch and about 3 s after a crash** in the hot mode (measured, see below).
 
 [![ci](https://github.com/Verttigo28/opn-betterHA/actions/workflows/ci.yml/badge.svg)](https://github.com/Verttigo28/opn-betterHA/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
 
-> Status: validated in a Hyper-V lab (OPNsense 26.7) and, with the real daemons against each other, on a FreeBSD 15 machine ([sandbox](lab/sandbox/README.md)); the NIC behaviour was measured on a Supermicro with Intel X710 and I210. Not yet validated as a pair of physical firewalls on a real switch, see [validation](docs/validation.md). Review the [security notes](docs/security.md) before putting it in front of production traffic.
+> Status: validated on **two Supermicro servers (Intel X710) with a real switch** (MikroTik CRS305 with real LACP bonds, 20 VLANs on a LAGG, the production configuration of a pfSense converted to OPNsense), with a client pinging every 20 ms through the switch: failover, crash, dead card, cold start, LACP. Earlier steps: a Hyper-V lab and the real daemons against each other on FreeBSD 15 ([sandbox](lab/sandbox/README.md)). Not yet validated: a production switch (Meraki, Juniper EX4600 and others: see the checklist in [operations](docs/operations.md#switch-checklist)), a power cut with a real PDU. TCP sessions kept across a failover were validated (section J5). Review the [security notes](docs/security.md) before putting it in front of production traffic. The hot standby is experimental.
 
 ## Why
 
@@ -20,11 +20,25 @@ OPNsense's built-in HA uses CARP: every interface needs three addresses, the sta
 | Failover | CARP advertisements | heartbeat on up to two paths, epoch-based split-brain protection |
 | Switch view | two MACs per interface | one MAC, moves with the active node |
 
+
+## Measured failover (two Supermicro servers, Intel X710, real switch)
+
+A client behind the firewalls pings every 20 ms through a MikroTik CRS305; 20 VLANs on a LAGG, the production configuration of a pfSense converted to OPNsense (207 rules, 91 NAT rules). Outage = what the client sees. Details and method: [validation](docs/validation.md) sections J to J3.
+
+| Scenario | Classic, failover LAGG | Classic, LACP | **Hot**, failover LAGG | **Hot**, LACP |
+|---|---|---|---|---|
+| Promotion (21 interfaces) | 3.1-3.8 s | 2.3-3.2 s | 0.18-0.22 s | 0.18-0.22 s |
+| Planned failover | 1.0 s | 12.5 s | 0.12-0.16 s | 0.10-0.18 s |
+| Crash of the active node | 4.9 s | 9.6 s | 2.8 s | 3.0 s |
+| Dead card (both ports cut) | 5.1 s | - | - | 3.1 s |
+
+For comparison, CARP (from its design, not measured here): about 3 to 6 s for a node failure. See [Warm and hot standby](docs/fast-ha.md#hot-standby-the-takeover-that-adds-addresses-and-nothing-else).
+
 ## Features
 
 **Core**
 - Shared IP/MAC (generated virtual MAC by default), standby fully silent, config locked on the standby.
-- Failover: **about 0.7 s of lost traffic for a planned switch, 1.5 s when the active node loses power** (lab, detection time 1 s). Firewall states follow through pfsync.
+- Failover, measured on two Supermicro servers with a real switch (client view, 20 ms probes): **classic mode 1.0 s planned / 4.9 s crash** (failover LAGG), 12.5 s / 9.6 s with an LACP LAGG; **hot mode 0.1-0.2 s planned / about 3 s crash**, LACP included (3 s of it is the detection time). Firewall states follow through pfsync.
 - Split-brain protection: two heartbeat paths, epochs, isolation guard, optional fencing hook, boot guard (a rebooted node always starts as standby).
 - Whole-config replication with revisions, integrity checks and drift detection. Plugins and DHCP leases follow the active node.
 - **GUI logins survive a failover**: sessions are replicated, so you stay logged in on the new active node.

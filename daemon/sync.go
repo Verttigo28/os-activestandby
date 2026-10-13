@@ -214,7 +214,7 @@ func (d *Daemon) applyConfig(xml []byte) error {
 		copyFile(prevCfg, configPath(), 0o640)
 		lockConfig()
 		d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
-		sh("configctl", "filter", "reload")
+		d.filterReloadLocal()
 		d.enforceOnce()
 		return fmt.Errorf("%w (rolled back to the previous good configuration)", cause)
 	}
@@ -239,7 +239,7 @@ func (d *Daemon) applyConfig(xml []byte) error {
 		return rollback(err)
 	}
 	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
-	if o, err := sh("configctl", "filter", "reload"); err != nil {
+	if o, err := d.filterReloadLocal(); err != nil {
 		return rollback(fmt.Errorf("filter reload: %v: %s", err, o))
 	}
 	d.enforceOnce() // belt and braces: nothing may have come up

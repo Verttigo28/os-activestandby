@@ -168,6 +168,7 @@ func (d *Daemon) localChecks() []Check {
 	}
 	if d.warmOn() {
 		cs = append(cs, d.warmChecks()...)
+		cs = append(cs, d.rulesetChecks()...)
 	}
 	if d.cfg.FenceCommand != "" {
 		if err := validateFenceCommand(d.cfg.FenceCommand); err != nil {

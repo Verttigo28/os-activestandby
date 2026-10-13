@@ -31,19 +31,23 @@ func setDetection(sec int) {
 	if hbInterval < 150*time.Millisecond {
 		hbInterval = 150 * time.Millisecond
 	}
+	// a daemon that was frozen for longer than the detection time must be recognised as frozen: with the default 3 s the gap is 3 s,
+	// with a 1 s detection a freeze of 1.5 s would otherwise look like 1.5 s of silence of the peer and promote this node
+	stallGap = min(3*time.Second, max(time.Second, hbDead))
 }
 
 type hbMsg struct {
-	Role   string `json:"role"`
-	State  string `json:"state"`
-	Epoch  uint64 `json:"epoch"`
-	Seq    uint64 `json:"seq"`
-	Mgmt   string `json:"mgmt,omitempty"`    // sender's management IPv4, lets the peer open the secondary path
-	Resync bool   `json:"resync,omitempty"`  // standby asks the active node for a full config push
-	TimeMs int64  `json:"time_ms,omitempty"` // sender clock; the standby follows the active node
-	Ver    string `json:"ver,omitempty"`     // OPNsense version of the sender
-	Plug   string `json:"plug,omitempty"`    // hasyncd (plugin) version of the sender
-	Warm   string `json:"warm,omitempty"`    // warm standby: "ready", or why this node could not take over fast (empty: classic mode)
+	Role    string `json:"role"`
+	State   string `json:"state"`
+	Epoch   uint64 `json:"epoch"`
+	Seq     uint64 `json:"seq"`
+	Mgmt    string `json:"mgmt,omitempty"`    // sender's management IPv4, lets the peer open the secondary path
+	Resync  bool   `json:"resync,omitempty"`  // standby asks the active node for a full config push
+	TimeMs  int64  `json:"time_ms,omitempty"` // sender clock; the standby follows the active node
+	Ver     string `json:"ver,omitempty"`     // OPNsense version of the sender
+	Plug    string `json:"plug,omitempty"`    // hasyncd (plugin) version of the sender
+	Warm    string `json:"warm,omitempty"`    // warm standby: "ready", or why this node could not take over fast (empty: classic mode)
+	Ruleset string `json:"ruleset,omitempty"` // hot standby: hash of the active node's ruleset it holds (ruleset.go)
 
 	Links        map[string]bool `json:"links,omitempty"`         // carrier of the sender's data devices
 	LinksUnknown []string        `json:"links_unknown,omitempty"` // data devices whose link cannot be read (a standby keeps them down)
@@ -138,7 +142,7 @@ func (d *Daemon) localHB() hbMsg {
 		Links:        d.health.snapshotLinks(),
 		LinksUnknown: d.health.snapshotUnknown(),
 		Health:       d.healthReason(),
-		Applied:      st.AppliedSHA, Busy: d.opsBusy(), Warm: d.warmSummary(), Host: hostName(), MgmtProbe: d.mgmtProbe(), Maint: st.Maintenance, MaintUntil: st.MaintenanceUntil, MaintAt: st.MaintAt}
+		Applied:      st.AppliedSHA, Busy: d.opsBusy(), Warm: d.warmSummary(), Ruleset: d.rulesetHB(st), Host: hostName(), MgmtProbe: d.mgmtProbe(), Maint: st.Maintenance, MaintUntil: st.MaintenanceUntil, MaintAt: st.MaintAt}
 }
 
 func (d *Daemon) handleHB(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +153,7 @@ func (d *Daemon) handleHB(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var m hbMsg
-	if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&m) == nil {
+	if json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&m) == nil {
 		d.hb.seen(path, m)
 		d.learnPeerMgmt(m.Mgmt)
 		d.peerWantsResync(m)
@@ -195,7 +199,7 @@ func (d *Daemon) hbPath(path string, addrOf func(State) string) {
 			continue
 		}
 		var m hbMsg
-		if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&m) == nil && resp.StatusCode == 200 {
+		if json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&m) == nil && resp.StatusCode == 200 {
 			d.hb.setRTT(path, time.Since(t0))
 			d.hb.seen(path, m)
 			d.learnPeerMgmt(m.Mgmt)

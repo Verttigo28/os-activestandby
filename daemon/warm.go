@@ -458,7 +458,7 @@ func (d *Daemon) warmReadiness(path string, set IfaceSet) {
 		}
 		warm = append(warm, dev)
 	}
-	if d.hotOn() && len(problems) == 0 {
+	if d.hotOn() { // also when something else is wrong: the watch must not pause
 		problems = append(problems, d.hotChecks(p, devs)...)
 	}
 	switch {
@@ -498,6 +498,10 @@ func (d *Daemon) warmSummary() string {
 	if ok, why := d.warmReady(); ok {
 		return "ready"
 	} else if why != "" {
+		// one entry per device that has a problem: the heartbeat must stay small whatever the number of VLANs
+		if len(why) > 300 {
+			why = why[:300] + "..."
+		}
 		return why
 	}
 	return "not ready"

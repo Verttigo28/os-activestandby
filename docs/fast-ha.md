@@ -71,7 +71,7 @@ What it means:
 
 The variant that avoids the bounce, a standby that already holds the shared MAC while staying completely silent, is the hot standby below. The worry that the firmware LLDP agent of the X710 would transmit with the shared MAC was measured and does not hold: it uses the permanent MAC of the port.
 
-## Hot standby (0.9.3): the takeover that adds addresses and nothing else
+## Hot standby: the takeover that adds addresses and nothing else
 
 The warm standby above takes the shared MAC at the takeover, and on these NICs that costs a link event. The **hot standby** (setting *Standby mode* = Hot) moves that cost to the moment the node becomes standby, when nobody waits for it:
 
@@ -96,7 +96,21 @@ The warm standby above takes the shared MAC at the takeover, and on these NICs t
 | Crash of the active node | 4.9 s | 9.6 s | **2.8 s** | **3.0 s** (3 s of it is the detection time) |
 | Dead card (both ports cut) | 5.1 s | not measured | not measured | **3.1 s** (2 s hold) |
 
-**Limits.** The ruleset on the standby is the one it had when it last was active: a rule added or removed on the active node since reaches the standby's packet filter only at the authoritative reload during the takeover (1-2 s in), and established connections pass on the pfsync states anyway. A new connection during the first moments of a takeover is judged by the standby's last ruleset. The mode is experimental and off by default: validate it on your hardware first (`lab/`, section J3 of the validation), in particular that the NIC does not transmit with the OS MAC while silent (the daemon will tell you).
+**The ruleset of the standby (the mirror).** A standby generates its own packet filter ruleset from its standby view of the configuration: no rule for the data interfaces (68 rules here, against 227 on the active node). Established connections pass anyway on the states pfsync replicated, but a **new** connection is dropped until the takeover has generated and loaded the real ruleset, about 1 s later: measured with a client opening a TCP connection every 40 ms, 21 connections in the first 0.85 s of a takeover needed the client's SYN retransmit (1 s) to get through. The hot standby therefore **mirrors the ruleset of the active node**: the active node sends what it has loaded (`/tmp/rules.debug`) to the standby over the pinned TLS connection; the standby checks it (default deny present, at most 8 MiB, no binary content, `pfctl -n` here), replaces the node-specific `set hostid` and `set limit` lines by its own (two nodes with one pf hostid would make the pfsync state ids collide), loads it, and reports the hash in its heartbeat so that the active node sends again when they differ (a change of rules on the active node reaches the standby within 3 s, measured: +1 rule, then -1). If the standby no longer hears its peer after the load, it puts its own ruleset back and keeps the mirror off for ten minutes. Result with the mirror: 2-3 connections delayed in the first 0.08 s of a takeover instead of 21 in the first 0.85 s. The pre-flight shows whether the standby holds the ruleset of the active node.
+
+**Limits.** The mode is experimental and off by default: validate it on your hardware first (`lab/`, section J3 of the validation), in particular that the NIC does not transmit with the OS MAC while silent (the daemon will tell you). Rules that depend on an address of the interface (dynamic address expansions) are inactive on the standby until the takeover gives it the addresses (pf then expands them by itself): the standby holds 187 of the 227 rules of the active node here.
+
+### Detection time of 1 second
+
+`detect_time` (Settings, Failover) defaults to 3 s and goes down to 1 s. What was measured with 1 s on the pair above (hot standby, LACP): a crash of the active node is served again after **1.2 s** (3.0 s with the default). A false failover did not happen under 80 s of full CPU load on both nodes, filter reloads in a loop on both and a ping flood on the HA link. What a shorter time costs, and what was fixed for it:
+
+- **Any stall of the active node's daemon longer than the detection time makes the standby take over**, by design (it cannot tell a stall from a death). Measured: a daemon frozen for 1.6 s was replaced (a short split-brain overlap, resolved in the usual way), one frozen for 0.7 s was not. With the hot standby a needless takeover costs 0.1-0.2 s of traffic, with the classic one 1-5 s; the anti-flapping hold (10 s) and the two-switches-in-30-minutes limit still apply.
+- **A frozen standby daemon woke up and promoted itself** with a 1 s detection (found by this test: the daemon that was frozen for 1.5 s took the silence it slept through for a dead peer, because the freeze guard still waited for 3 s). The guard now follows the detection time (never above it, never above 3 s). Frozen for 1.5 s and for 4 s: no promotion.
+- A heartbeat is a request on a TCP connection: one lost packet delays a beat by the retransmission time of the stack (some hundred ms), and there are about 7 beats per second on each path. With two independent paths (HA link and management) both must be silent for the whole time, so one lossy path is not enough; but two paths through the same switch are not independent.
+- Risks that do not change: a symmetric partition of both paths still produces two active nodes until it is resolved (fencing is the only complete answer), and a node that is merely starved (a virtual machine that is paused, a host overloaded) looks dead after the detection time.
+
+**Recommendation**: 1-2 s on physical machines with a dedicated direct HA cable and a management path through another switch, the hot standby, and a watched event log for "peer lost" events during the first weeks; keep 3 s or more for virtual machines, a shared HA network or a classic standby (where a needless takeover costs seconds).
+
 
 ### Compared with CARP (from the design of both, not measured here)
 

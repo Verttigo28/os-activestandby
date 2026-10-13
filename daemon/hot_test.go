@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 const macShared3 = "02:aa:bb:cc:dd:03"
@@ -114,6 +115,8 @@ func TestHotSilenceCommandsOrder(t *testing.T) {
 
 func hotWire(t *testing.T) (*wire, *Daemon, *fakeHost, *Daemon, *fakeHost) {
 	t.Helper()
+	resetHotGuard()
+	t.Cleanup(resetHotGuard)
 	w := newWire(macShared1)
 	w.hot = true
 	mk := func(name string, st State, devs map[string]*fakeDev) (*Daemon, *fakeHost) {
@@ -304,5 +307,71 @@ func TestHotGuardBaselineSurvivesATermAsActiveNode(t *testing.T) {
 	}
 	if !hb.devs["vlan0.10"].up {
 		t.Error("the device must not have been shut down")
+	}
+}
+
+func TestPfDefaultDenyInTheGeneratedSource(t *testing.T) {
+	src := "block in log inet from {any} to {any} label \"02f4\" # Default deny / state violation rule\n"
+	if !pfDefaultDeny(src) {
+		t.Error("the default deny of the generated ruleset (rules.debug) must be recognised")
+	}
+	if pfDefaultDeny("block in log quick inet proto {tcp udp} from {any} port {0} to {any} label \"b4\" # block all targeting port 0\n") {
+		t.Error("a rule that blocks port 0 is not the default deny")
+	}
+}
+
+func resetHotGuard() {
+	hotTxMu.Lock()
+	hotTxLast = map[string]uint64{}
+	hotLeak = map[string]time.Time{}
+	hotTxMu.Unlock()
+}
+
+// found by the review: the first version brought a device that had leaked back up at the next pass of the enforcer
+func TestHotLeakIsLatched(t *testing.T) {
+	_, _, _, b, hb := hotWire(t)
+	b.warmReadiness(b.activeXMLPath(), hotSet) // baseline
+	hb.devs["vlan0.10"].tx += 3
+	for pass := 0; pass < 3; pass++ { // the enforcer runs every second
+		b.warmReadiness(b.activeXMLPath(), hotSet)
+		if ok, _ := b.warmReady(); ok {
+			t.Fatalf("pass %d: a device that leaked must keep the standby not ready", pass)
+		}
+		if hb.devs["vlan0.10"].up {
+			t.Fatalf("pass %d: it must stay down", pass)
+		}
+	}
+	// the latch ends after a while (or the operator fixes the NIC)
+	hotTxMu.Lock()
+	hotLeak["vlan0.10"] = time.Now().Add(-hotLeakLatch - time.Second)
+	hotTxMu.Unlock()
+	b.warmReadiness(b.activeXMLPath(), hotSet)
+	b.warmReadiness(b.activeXMLPath(), hotSet)
+	if ok, why := b.warmReady(); !ok {
+		t.Fatalf("after the latch the standby is ready again: %s", why)
+	}
+}
+
+// a safety check that cannot be made is not passed
+func TestHotChecksFailClosed(t *testing.T) {
+	_, _, _, b, hb := hotWire(t)
+	hb.pfRules = "" // pfctl cannot be read
+	b.warmReadiness(b.activeXMLPath(), hotSet)
+	if ok, why := b.warmReady(); ok || !strings.Contains(why, "cannot be read") {
+		t.Fatalf("an unreadable packet filter is not a pass: %v %q", ok, why)
+	}
+}
+
+func TestHotDevicesRefuseOddNames(t *testing.T) {
+	p := hotView(hotTestPlan, true)
+	p.Laggs = append([]LaggInfo(nil), p.Laggs...)
+	p.Laggs[0].Members = []string{"ixl0", "-promisc", "ixl1 up"}
+	for _, dev := range []string{"-promisc", "ixl1 up"} {
+		if _, in := warmDevices(p, nil)[dev]; in {
+			t.Errorf("%q must never reach ifconfig", dev)
+		}
+	}
+	if _, in := warmDevices(p, nil)["ixl0"]; !in {
+		t.Error("a normal member stays")
 	}
 }

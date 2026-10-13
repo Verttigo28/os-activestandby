@@ -90,3 +90,20 @@ Security review of the new code: the fast path passes only values from the plan 
 | info | design | A standby that leaks a frame with the shared MAC would move the MAC on the switch. | A NIC may transmit with the OS MAC. | Transmit watch on every silent interface, shut down on the first packet; the packet filter of the standby must have its default deny. | measured silent for 45 s on the X710; unit tests for both checks |
 
 Known limit (documented): the ruleset on a standby is the one of its last active period; the authoritative reload of the takeover refreshes it 1-2 s in.
+
+## Sixth round (1.0.0): independent review of everything since 0.9.1
+
+An independent reviewer read all changes (hot standby, ruleset mirror, native VLAN takeover, health and heartbeat changes, PHP helpers) for injection, the peer endpoint, races and plain bugs. No remote-exploitable issue and no blocker was found; eight items to fix and a list of nits, all fixed (tests added for each behaviour):
+
+| Component | Finding | Correction |
+|---|---|---|
+| `hot.go` | The transmit watch was not latched: the device it shut down came back at the next enforcer pass. | Latched down for ten minutes (`hotLeak`); the watch runs whatever else is wrong. |
+| `ruleset.go` | The role was checked before the lock wait, not after (old active node vs new active node). | Checked again with the lock held. |
+| `promote.go` | A failed promotion restored the standby view while the early ruleset generation and the routes still ran. | Both are waited for before the cleanup. |
+| `ruleset.go` | Refusals were repeated every 3 s with up to 8 MiB; after a failed load the standby claimed a mirror it no longer had; a peer without hot mode was sent rulesets. | Exponential backoff to 5 min, the claim cleared, the send skipped for a peer that is not warm/hot. |
+| `heartbeat.go`, `warm.go` | A 4 KiB heartbeat limit with an unbounded readiness text: many VLANs with problems could make the peer look dead. | 64 KiB and the text capped at 300 characters. |
+| `ruleset.go` | `/tmp/rules.debug` read without ownership check. | Regular file, owner root, not group/other writable; `include` and `load anchor` refused in a mirrored ruleset. |
+| `ruleset.go` | The "peer still heard" wait held the operations lock. | Done outside the lock; the rollback only while still a standby. |
+| `hot.go` | The safety checks failed open on an unreadable `pfctl` or `netstat`. | Fail closed. |
+| nits | device names of parents and LAGG members not validated; link hold could exceed the configured hold | validated; `min(hold, ...)` |
+Not changed, documented: the MTU set at a takeover is not restored at stand-down; `promisc` stays on a former parent; the enforcer takes the operations lock every second (a promotion may wait for one pass).

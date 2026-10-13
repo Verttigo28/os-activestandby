@@ -16,6 +16,7 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	t0 := time.Now()
 	ph := &phaseLog{t0: t0}
 	log.Printf("PROMOTE (%s)", reason)
+	d.rs.set("") // a node that becomes active holds its own ruleset, not a mirror
 	if d.store.Get().State == StateActive {
 		return nil
 	}
@@ -39,8 +40,18 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	}
 	// from here on a failure must not leave the full config (shared IPs/MACs) on a node that stays standby
 	earlyStarted := false // the full ruleset is loaded before the interfaces are up (below)
+	// the two things that run in the background of the interface bring-up; the cleanup below waits for both, otherwise it
+	// would rewrite the configuration and reload the packet filter while they are still generating from the full one
+	var earlyDone, routesDone chan struct{}
+	var earlyErr error
 	defer func() {
 		if retErr != nil && d.store.Get().State != StateActive {
+			if earlyDone != nil {
+				<-earlyDone
+			}
+			if routesDone != nil {
+				<-routesDone
+			}
 			log.Printf("promote failed (%v): back to the standby view", retErr)
 			if err := d.writeStandbyView(full); err != nil {
 				log.Printf("promote cleanup: %v", err)
@@ -85,11 +96,13 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	// pass once pf has the ruleset of the active node, established ones already pass on the states pfsync replicated. The
 	// authoritative reload below still runs after routes, gateways and addresses exist (a rule that depends on them is then
 	// regenerated); until then this is the same ruleset the node will keep, loaded a second or two earlier.
-	var earlyPF chan error
 	if d.cfg.fastOn() {
-		earlyPF = make(chan error, 1)
+		earlyDone = make(chan struct{})
 		earlyStarted = true
-		go func() { earlyPF <- reloadFilter() }()
+		go func() {
+			defer close(earlyDone)
+			earlyErr = reloadFilter()
+		}()
 	}
 	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 	var firstErr error
@@ -154,7 +167,7 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		ph.mark(fmt.Sprintf("tier %d: %d interface(s) configured", n, len(group)))
 	}
 	// routes and gateway monitoring (0.3-0.8 s) need the addresses only: they run while the links settle and the switch is told
-	routesDone := make(chan struct{})
+	routesDone = make(chan struct{})
 	go func() {
 		defer close(routesDone)
 		if out, err := sh(reconfScript, "routes"); err != nil {
@@ -193,8 +206,9 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		announce(i.Dev)
 	}
 	ph.mark("gratuitous ARP sent")
-	if earlyPF != nil {
-		if err := <-earlyPF; err != nil {
+	if earlyDone != nil {
+		<-earlyDone
+		if err := earlyErr; err != nil {
 			log.Printf("promote: early ruleset not loaded (%v), the reload after the interfaces decides", err)
 		} else {
 			ph.mark("packet filter loaded (early)")

@@ -896,3 +896,18 @@ func TestAPromotionIsNotAFreeze(t *testing.T) {
 		t.Fatalf("the tick must be stamped when the step ends, not when it began (%v ago)", time.Since(d.auto.lastTick))
 	}
 }
+
+// with a 1 s detection a freeze of 1.5 s must be recognised as a freeze, not taken for 1.5 s of silence of the peer
+func TestFreezeGapFollowsTheDetectionTime(t *testing.T) {
+	oldD, oldI, oldG := hbDead, hbInterval, stallGap
+	t.Cleanup(func() { hbDead, hbInterval, stallGap = oldD, oldI, oldG })
+	for sec, want := range map[int]time.Duration{1: time.Second, 2: 2 * time.Second, 3: 3 * time.Second, 10: 3 * time.Second} {
+		setDetection(sec)
+		if stallGap != want {
+			t.Errorf("detection %d s: stall gap %v, want %v", sec, stallGap, want)
+		}
+		if stallGap > hbDead {
+			t.Errorf("the stall gap (%v) must not exceed the detection time (%v)", stallGap, hbDead)
+		}
+	}
+}

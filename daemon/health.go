@@ -202,7 +202,7 @@ func (d *Daemon) healthStep() {
 // gone. Services and probe targets keep the whole hold (they may only be restarting).
 func holdFor(id string, hold time.Duration) time.Duration {
 	if strings.HasPrefix(id, "link:") {
-		return max(hold/3, 2*time.Second)
+		return min(hold, max(hold/3, 2*time.Second))
 	}
 	return hold
 }

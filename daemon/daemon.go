@@ -17,7 +17,7 @@ import (
 )
 
 // version is set at build time (-ldflags "-X main.version=...") by CI and build/build.ps1.
-var version = "0.9.3"
+var version = "1.0.0"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`
@@ -86,7 +86,8 @@ type Daemon struct {
 	pkgReport     atomic.Value // string: how the plugin set of this standby differs from the active node (empty: conform)
 	wst           warmStatus   // readiness of the warm standby (see warm.go)
 	hwOnce        sync.Once
-	hwv           *hwMacs // permanent MAC addresses of the warm devices
+	hwv           *hwMacs       // permanent MAC addresses of the warm devices
+	rs            rulesetMirror // the ruleset of the active node as a hot standby holds it (see ruleset.go)
 }
 
 func loadConfig() Config {
@@ -195,6 +196,7 @@ func runDaemon() error {
 	go d.pfsyncLoop()
 	go d.autoLoop()
 	go d.healthLoop()
+	go d.rulesetLoop()
 	go d.driftLoop()
 	go d.leaseLoop()
 	go d.jobLoop()
@@ -233,6 +235,7 @@ func (d *Daemon) peerMux() *http.ServeMux {
 	mux.HandleFunc("/v1/reboot", d.post(d.paired(d.handleReboot)))
 	mux.HandleFunc("/v1/job", d.post(d.paired(d.handleJobAdopt)))
 	mux.HandleFunc("/v1/sessions", d.post(d.paired(d.handleSessions)))
+	mux.HandleFunc("/v1/ruleset", d.post(d.paired(d.handleRuleset)))
 	return mux
 }
 

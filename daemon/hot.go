@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Hot standby (setting "High availability mode" = hot). EXPERIMENTAL, opt-in.
@@ -34,6 +35,10 @@ import (
 // the shared MAC on the VLAN only and the LAGG keeping its own MAC (it then runs promiscuous so that it accepts it).
 
 const hotParent = "promisc" // value of hotDevices for a device that stays up with its own MAC and must accept the VLAN MAC
+
+// a device that transmitted while it had to be silent stays down this long (a device that leaks every few seconds must not come
+// back "ready" at the next pass of the enforcer)
+const hotLeakLatch = 10 * time.Minute
 
 var hotLaggProto = map[string]bool{"failover": true, "loadbalance": true, "roundrobin": true, "lacp": true}
 
@@ -105,7 +110,7 @@ func hotDevices(p WarmPlan, keepUp []string) map[string]string {
 		}
 	}
 	for _, i := range p.Ifaces {
-		if i.Eligible && i.Parent != "" && !keep[i.Parent] && !elig[i.Parent] {
+		if i.Eligible && i.Parent != "" && !keep[i.Parent] && !elig[i.Parent] && devNameRe.MatchString(i.Parent) {
 			out[i.Parent] = hotParent
 		}
 	}
@@ -114,7 +119,8 @@ func hotDevices(p WarmPlan, keepUp []string) map[string]string {
 			continue
 		}
 		for _, m := range l.Members {
-			if _, ok := out[m]; !ok && !keep[m] {
+			// a name from the replicated configuration becomes an argument of ifconfig: plain names only
+			if _, ok := out[m]; !ok && !keep[m] && devNameRe.MatchString(m) {
 				out[m] = ""
 			}
 		}
@@ -156,6 +162,17 @@ func (d *Daemon) hotSilence(dev, shared string) (ifState, error) {
 	st := d.readIf(dev)
 	if !st.Exists {
 		return st, fmt.Errorf("%s does not exist", dev)
+	}
+	// a device that transmitted while silent is not brought up again for a while: the caller keeps it down (classic standby)
+	hotTxMu.Lock()
+	at, latched := hotLeak[dev]
+	if latched && time.Since(at) > hotLeakLatch {
+		delete(hotLeak, dev)
+		latched = false
+	}
+	hotTxMu.Unlock()
+	if latched {
+		return st, fmt.Errorf("%s transmitted while it had to be silent (%s): kept down, the takeover will be classic", dev, at.Format("15:04:05"))
 	}
 	if st.silentHot(shared) && (shared != hotParent || st.Promisc) {
 		return st, nil
@@ -251,9 +268,11 @@ func (d *Daemon) hotRebase(dev string) {
 }
 
 var (
-	pfDefaultDenyRe = regexp.MustCompile(`(?m)^block (drop )?in (log )?(inet6? )?all( |$)`)
+	// the loaded form ("block drop in log inet all") and the generated source ("block in log inet from {any} to {any}")
+	pfDefaultDenyRe = regexp.MustCompile(`(?m)^block (drop )?in (log )?(inet6? )?(all|from \{?any\}? to \{?any\}?)( |$)`)
 	hotTxMu         sync.Mutex
 	hotTxLast       = map[string]uint64{}
+	hotLeak         = map[string]time.Time{} // devices that transmitted while silent: kept down for hotLeakLatch (guarded by hotTxMu)
 )
 
 // pfDefaultDeny: the loaded ruleset blocks what no rule passes. pf passes by default, so without this line a standby that
@@ -281,7 +300,10 @@ func (d *Daemon) hotChecks(p *WarmPlan, devs map[string]string) []string {
 		}
 	}
 	var problems []string
-	if out, err := d.run("pfctl", "-sr"); err == nil && !pfDefaultDeny(out) {
+	// a safety check fails closed: what cannot be read is not "fine"
+	if out, err := d.run("pfctl", "-sr"); err != nil {
+		problems = append(problems, "the packet filter of this standby cannot be read: "+strings.TrimSpace(out))
+	} else if !pfDefaultDeny(out) {
 		problems = append(problems, "the packet filter of this standby has no default deny rule: a frame for the shared MAC would be routed")
 	}
 	names := make([]string, 0, len(devs))
@@ -295,18 +317,17 @@ func (d *Daemon) hotChecks(p *WarmPlan, devs map[string]string) []string {
 	defer hotTxMu.Unlock()
 	for _, dev := range names {
 		out, err := d.run("netstat", "-I", dev, "-n", "-b")
-		if err != nil {
-			continue
-		}
 		n, ok := txPackets(out)
-		if !ok {
+		if err != nil || !ok {
+			problems = append(problems, dev+": its transmit counter cannot be read")
 			continue
 		}
 		if last, seen := hotTxLast[dev]; seen && n > last {
 			problems = append(problems, fmt.Sprintf("%s transmitted %d packet(s) while silent: shut down, the takeover will be classic", dev, n-last))
-			d.event("error", "hot standby: %s transmitted %d packet(s) while it should be silent: shutting it down", dev, n-last)
+			d.event("error", "hot standby: %s transmitted %d packet(s) while it should be silent: shutting it down for %s", dev, n-last, hotLeakLatch)
 			d.flush(dev)
 			delete(hotTxLast, dev)
+			hotLeak[dev] = time.Now() // latched: the next pass of the enforcer must not bring it back
 			continue
 		}
 		hotTxLast[dev] = n

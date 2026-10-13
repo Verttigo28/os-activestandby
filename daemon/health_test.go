@@ -116,3 +116,9 @@ func TestLinkLossIsActedOnSoonerThanServices(t *testing.T) {
 		t.Fatalf("services keep the whole hold: %v", got)
 	}
 }
+
+func TestHoldForNeverExceedsTheConfiguredHold(t *testing.T) {
+	if got := holdFor("link:lagg0", time.Second); got != time.Second {
+		t.Fatalf("a hold of 1 s stays 1 s: %v", got)
+	}
+}

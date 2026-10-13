@@ -172,7 +172,7 @@ Two Supermicro machines (AMD EPYC 4124P, 8 cores, OPNsense 26.7 on FreeBSD 15.1)
 
 **What took the time, and what changed.** The promotion of 10.1 s was 9.1 s of interface configuration: the stock `interface_configure()` was called with *reload*, which restarts routing, IPsec, DHCP **and Unbound** for every interface (about 0.9 s each instead of 0.17 s). Now it configures the interface only (routes, DHCP and DNS already ran once afterwards). Phases of a promotion with 21 interfaces (0.9.1): LAGG 0.7-1.2 s (the X710 re-initialises when its MAC changes), 20 VLANs 2.3 s more (CPU bound: one process or twenty make no difference, `legacy_interfaces_details()` per interface), routes 0.3 s, links 0.1 s, pf reload and services 0.8 s. What would shorten it further is in [fast-ha](fast-ha.md#where-the-time-goes-what-to-measure).
 
-**Not covered by this run:** a LAGG with two cabled ports (only `ixl1` is cabled), LACP with a real partner, TCP sessions kept across a failover (the lab switch cannot open a TCP connection across the firewall), a power cut with a real PDU or IPMI (a kernel panic was used), the warm standby on hardware (measured separately, see [fast-ha](fast-ha.md)), two machines with different NIC names. The HA link of this run went through a shared switch (two foreign DHCP clients were visible on it), not a direct cable.
+**Not covered by this run (sections J2 to J5 below cover the LAGG with two ports, LACP with a real partner and TCP sessions across a failover):** a power cut with a real PDU or IPMI (a kernel panic was used), the warm standby on hardware (measured separately, see [fast-ha](fast-ha.md)), two machines with different NIC names. The HA link of this run went through a shared switch (two foreign DHCP clients were visible on it), not a direct cable.
 
 ### J2. Same pair, 0.9.2: native VLAN takeover, early ruleset, shorter link-loss hold
 
@@ -199,7 +199,7 @@ Same pair; the LAGG now has **two ports per firewall** (`ixl0` and `ixl1` of eac
 | Graceful failover | 1.0 s | **12.5 s** | 0.12 s / 0.16 s (gateway / forwarded) | 0.10 s / 0.18 s |
 | Crash of the active node (kernel panic) | 4.9 s | 9.6 s | 2.8 s | 3.0 s |
 | Dead card (both ports of the active node cut at the switch) | 5.1 s | - | - | 3.1 s (twice) |
-| New connections during a graceful failover | - | - | - | one probe in five lost, nothing after: the ruleset of the standby is already loaded |
+| New connections during a graceful failover | - | - | - | with the ruleset mirror (below): 2-3 connections delayed by the 1 s SYN retransmit in the first 0.08 s; without it (0.9.3): 21 in the first 0.85 s |
 
 The crashed node comes back by itself as a ready hot standby with its LACP bundle established. What the hardware showed and the daemon was corrected for (all three are in the unit tests now):
 
@@ -208,3 +208,38 @@ The crashed node comes back by itself as a ready hot standby with its LACP bundl
 - `ifconfig` reads the word after `inet <address>` as the peer address of a point-to-point link (also after `alias`): the native VLAN takeover first failed with "inet6: bad value" on the hardware; the commands are now one per address.
 
 What is not covered: a switch that aggregates LACP dynamically (it would merge the two firewalls, which is why *LACP shared* is opt-in and says so), more than two ports per LAGG, mixed hot and classic interfaces under load, the `own` MAC variant of an LACP LAGG (not built: it needs the permanent MAC memory and renegotiates LACP at the takeover for an interface directly on the LAGG).
+
+### J4. Ruleset mirror, detection time of 1 s (1.0.0)
+
+**Ruleset mirror, A/B on the same pair.** The switch opens an HTTPS connection to the firewall every 40 ms (a new TCP connection, so a new pf state, each time) while the active node is switched over; the new active node records every SYN and SYN-ACK on the VLAN. A connection whose SYN-ACK follows its first SYN by about 1.07 s lost its first SYN to pf (the client retransmits after 1 s).
+
+| Standby | Standby ruleset | Connections delayed by the SYN retransmit | Window |
+|---|---|---|---|
+| 0.9.3, no mirror | 71 rules (standby view) | 21 | first 0.85 s of the takeover |
+| 1.0.0, mirror | 187 rules (the active node's ruleset, minus what needs an address) | 2-3 | first 0.08 s |
+
+A rule added on the active node reaches the standby's pf within 3 s (187 to 188 rules), and its removal too. (An earlier "new connection" test with RouterOS pings was wrong: RouterOS uses one ICMP id per process, so every probe belonged to a state that pfsync had already replicated.)
+
+**Detection time of 1 s** (hot standby, LACP, two Supermicro machines):
+
+| Test | Result |
+|---|---|
+| Crash of the active node | client outage **1.2 s** (3.0 s with the default 3 s) |
+| 80 s of full CPU load on both nodes, filter reloads in a loop on both, ping flood (1400 bytes) on the HA link | no failover, no event |
+| Standby daemon frozen 1.5 s (SIGSTOP) | **0.9.3: it promoted itself** (found here); fixed: no promotion; same for 4 s |
+| Active daemon frozen 0.7 s | nothing |
+| Active daemon frozen 1.6 s | the standby takes over, short split-brain overlap resolved as usual (inherent to a 1 s detection) |
+
+See [fast-ha](fast-ha.md#detection-time-of-1-second) for what a short detection time costs and the recommendation.
+
+### J5. A TCP session that crosses the firewall survives the failover (1.0.0)
+
+A long-lived TCP session through the firewalls, without any PC: the MikroTik runs two iBGP instances, one in the main routing table (192.168.40.100) and one in a VRF (192.168.65.100); their session on TCP 179 crosses the firewall between two VLANs (keepalive 3 s, hold time 9 s, so a stall of more than 9 s resets it). pf holds the same 6 states for it on both nodes (`ESTABLISHED:ESTABLISHED`).
+
+| Event | Session |
+|---|---|
+| Graceful failover (hot standby, LACP) | the same session: uptime 20 s before, 29 s after (no reset) |
+| Crash of the active node (kernel panic) | the same session: uptime 17 s before, 42 s 14 s later (no reset) |
+| Control: the pf states flushed on the new active node right after a failover | the session resets (uptime back to 1 s): the test does detect a missing state |
+
+This is what the pfsync replication is for; it was already visible on the standby (the ruleset of the standby has no rule for these connections, yet they continue).

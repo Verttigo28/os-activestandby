@@ -28,6 +28,24 @@ Setting *Standby mode* (shared, default *Classic*). In *Warm standby* the standb
 
 Check *Pre-flight* after switching it on: the standby must report *ready*, and the interfaces that keep the classic takeover are listed with the reason. To go back, set the mode to *Classic*; the standby takes the warm ports down again within a few seconds.
 
+
+## Hot standby (experimental)
+
+Setting *Standby mode* = *Hot standby*. The standby keeps the LAGG, its ports and the VLANs up, already carrying the shared MAC, with no address and IPv6 off; a takeover adds the addresses (about 0.2 s) and the packet filter of the standby already holds the ruleset of the active node (the *ruleset mirror*). Read [Warm and hot standby](fast-ha.md#hot-standby-the-takeover-that-adds-addresses-and-nothing-else) first.
+
+**Before switching it on** (both firewalls get the same mode: the setting is replicated from the active node)
+1. The [switch checklist](#switch-checklist) is done: edge ports, no port security, **one static port-channel per firewall** if the LAGG is LACP.
+2. LACP LAGG: choose *Hot standby with an LACP LAGG*. *Off* keeps the classic takeover for an interface that is directly on the LAGG (safe on any switch); *Shared* is the fast one and needs the static port-channels (Meraki aggregates and Juniper `ae` interfaces are static in that sense; a switch that aggregates by itself from the partner system id is not).
+3. Pre-flight must pass before a failover test: *hot standby: ready ... up and silent* on the standby and *standby ruleset: the standby holds the ruleset of this node*. The interfaces that keep the classic takeover are listed with the reason (DHCP, PPPoE, an MTU, a bridge, ...).
+
+**Switching on** (in a maintenance window the first time): set the mode on the active node, wait for the standby to report *ready*, look at the switch (the shared MAC stays on the port of the active node; the standby's ports are up and send only LLDP from their own MAC), then run a *Failover now* with a client pinging every 20 ms: the outage should be a fraction of a second. Do the same for a crash (power off the active node) once.
+
+**What the daemon watches for you.** On the standby, the transmit counter of every silent interface: one that transmits is shut down and the standby reports *not ready* (event log: "transmitted N packet(s) while it should be silent"); the next takeover is then classic. The packet filter of the standby must have its default deny. The standby also checks, before and after every takeover step, that each interface is in the state the plan says, and falls back to the classic takeover on any difference.
+
+**Going back**: set the mode to *Classic*; the standby takes its ports down again within a few seconds. Nothing else has to be undone.
+
+**Choosing the detection time**: see [fast-ha](fast-ha.md#detection-time-of-1-second). 1-2 s is reasonable with the hot standby on physical machines with a dedicated HA cable; keep 3 s or more on virtual machines.
+
 ## Maintenance mode
 
 **Operations > Maintenance mode** pauses automatic failover, preemption and health-driven switching on both nodes for 1-24 h chosen in the GUI (default 4 h, it switches itself off; the console and API accept up to 72 h). Split-brain protection stays on. Use it for planned work.
@@ -129,3 +147,35 @@ For a layout where every network is a VLAN on a LAGG, select the VLAN interfaces
 - Hiding the core "High Availability" menu is cosmetic; the pages stay reachable by URL.
 
 **Before production, on the real hardware** (see `lab/hw-probe.sh`): link behaviour of the `ixl` NICs when the standby takes them down (does the switch see link loss?), a failover with a traffic generator, a power cut of the active firewall, a cold start of both firewalls together, a VLAN-specific shared MAC with promiscuous mode off (done, see section J of the validation: it found a defect), and a promote with your real number of VLANs (done: 4.4-4.9 s with 21 interfaces).
+
+## Switch checklist
+
+The measurements in [validation](validation.md) were made with a MikroTik CRS305 (RouterOS 7.12). What follows is the list to check on the switch of a real installation; the points for Juniper EX4600 and Meraki MS come from the general behaviour of those platforms and **have not been tested with this plugin**: validate them on your equipment (a graceful failover with a client pinging every 20 ms is enough to see a problem).
+
+**All switches, all modes**
+- **Edge / portfast on the ports of the firewalls** (RSTP: `edge`; Junos: `edge` under `protocols rstp interface`; Meraki: RSTP on with the port as an edge port, and BPDU guard only if no switch is ever cabled there). Without it a port whose link comes back waits about 3 s before forwarding: measured as 3-4 s of extra outage after every takeover.
+- **No port security, sticky MAC, MAC limit or MAC-move limit** on those ports: the shared MAC moves from one port to the other at every failover.
+- **Dynamic ARP inspection / DHCP snooping**: the ports of the firewalls must be *trusted*, or the gratuitous ARP that announces the takeover is dropped.
+- **Storm control** on broadcast must leave room for a few gratuitous ARP per interface (20 VLANs: a burst of about 60 frames).
+- No MAC aging shorter than a few minutes on those VLANs (an unknown unicast is flooded to both firewalls; the standby does not answer, but the traffic doubles).
+
+**LACP** (one LAG per firewall, never one LAG across both)
+- **Juniper EX4600**: one `ae` interface per firewall (`aeX { aggregated-ether-options { lacp { active; periodic fast; } } }`, member interfaces `gigether-options { 802.3ad aeX; }`), the two `ae` independent, not part of one MC-LAG or ESI-LAG. Each `ae` forms its own bundle, so both partners reporting the same system id (the shared MAC, *Hot standby with an LACP LAGG = Shared*) is no problem there.
+- **Meraki MS**: aggregate the ports of each firewall as its own link aggregation in the dashboard (LACP is what Meraki aggregates use), one aggregate per firewall. Check that no "access policy / sticky MAC allow list" is applied to those ports.
+- **Not supported with *Shared***: a switch that forms aggregates by itself from the partner system id (some dynamic LACP implementations, bonding on a Linux switch side) would merge the two firewalls into one LAG. Keep *Off* there: the LACP LAGG then uses the classic takeover.
+- Use the fast LACP rate on both sides (`periodic fast` / the *fast timeout* of the LAGG): a classic takeover with LACP waits for the bundle (12.5 s measured with a 1 s rate on both sides).
+
+**What to look at when it does not behave**: the host table of the switch for the shared MAC during a failover (it must move to the other port within the announcement), the link log of the ports (a port that bounces at a takeover is a classic-mode port or a NIC that re-initialises), the LACP state of both bundles.
+
+## Production pilot checklist
+
+For a first installation in a small data centre. Keep the **classic mode** until every line is done once; the hot standby is opt-in afterwards.
+
+1. Two machines with the same NIC names, the same OPNsense (26.7 or newer) and the same plugins; HA link on a dedicated cable (a direct cable, not a switch), a management interface on a network that does not depend on the data switch.
+2. The [switch checklist](#switch-checklist) done on the ports of both firewalls (edge ports, no port security, trusted ARP, one static port-channel per firewall for LACP).
+3. Install the package on both, run the setup wizard, pair; *Pre-flight* must show no failure and you must have read every warning (monitored interfaces, probe targets, fencing, management probe).
+4. Set **Monitored interfaces** (a dead card or LAGG does not cause a failover otherwise) and, ideally, probe targets such as the upstream gateway.
+5. In a maintenance window with a client pinging every 20 ms: *Failover now* both ways, then power off the active node (a real power cut, not only a shutdown), then unplug one data cable of the active node. Expect, in the classic mode, 1-5 s (LACP: up to 12 s); read the history (`hasyncd ctl history`) for the phases.
+6. Check that the standby takes over after a cold start of both machines and after one machine alone; that a configuration change on the active node shows *in sync*; that the standby's GUI is reachable on its management address.
+7. Only then, optionally, the hot standby (section above), with the same tests again, and a shorter detection time if you want it (see [fast-ha](fast-ha.md#detection-time-of-1-second)).
+8. Keep a recent configuration backup of both nodes, `hasyncd ctl break` and the break-pair procedure at hand, and watch the event log during the first weeks ("peer lost", "health failure", "transmitted ... while silent", "ruleset mirror").

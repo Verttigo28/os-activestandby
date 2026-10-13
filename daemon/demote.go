@@ -21,6 +21,7 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) error {
 	d.ops.bg.Wait() // a DHCP/DNS restart started by the last promote must not run after we went standby
 	t0 := time.Now()
 	log.Printf("DEMOTE (%s)", reason)
+	d.rs.set("") // what a standby holds is decided again: the new active node sends its ruleset
 	st := d.store.Get()
 	if st.State == StateActive {
 		// config.xml is the authoritative full config right now: keep it
