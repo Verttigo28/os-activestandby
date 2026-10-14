@@ -210,3 +210,33 @@ Still open:
 - **Without an external arbiter, a partition of both paths makes two active nodes until a path returns** unless `fence_required` is set. This is the limit of two nodes and is said in the README.
 - A hung command in the path of a promotion can still delay it by up to 2 minutes (the bound); no helper has been seen to hang.
 - The lab validation of this release: see [validation](validation.md).
+
+## Eleventh round (1.0.5): the audit of 11372fc
+
+An external audit of 11372fc named two priorities; two further independent reviews read the whole repository again.
+
+**Priority 1, plugin installation against a promotion.** Confirmed and reproduced by a deterministic test (a hook stops the installation between its role check and its registration; a promotion starting there found nothing to stop and the installation ran next to it). Fixed: the role check and the registration are under the lock that a promotion takes to block installations for its whole duration; both orders are tested. After the 15 s wait of a promotion the installation's process group has been sent SIGKILL; the promotion goes on, no new installation starts, and a second installation no longer waits behind one that does not end (it would have held every later configuration push).
+
+**Priority 2, the daemon of the active node dies alone.** What the code did: the standby takes over a peer that is silent on every path when it can show it is not the isolated node. A `SIGKILL` of hasyncd is followed by a restart by daemon(8) within about a second, under the detection time; a hang (`SIGSTOP`), a stop of the service, or the supervisor killed too, are not. Reproduced in the model (both nodes held the identity) and on the hardware. Added: before such a takeover the standby pings the system of the peer on the HA link and on management; an answer means the machine runs (the kernel answers without the daemon) and may still forward, so without fencing the standby does not take over and says why; with a fencing command it fences first. On the two Supermicro servers: the daemon of the active node frozen for 20 s, the standby refused and showed the reason, the active node kept its 18 addresses, nothing changed when the daemon resumed; then the whole active machine was rebooted without shutdown and the standby took over (detection 4.5 s), the crashed node came back as standby.
+
+What this does not solve: a machine that no longer forwards but still answers ping (a data plane that is broken while the kernel runs) is not taken over automatically without fencing; a partition of both paths still leads to two active nodes without fencing (no ping gets through either). Two nodes without an arbiter cannot tell these cases apart reliably; fencing (IPMI, PDU) is the answer.
+
+| Finding (reviews) | Verdict | Change |
+|---|---|---|
+| Hand-over request between two standbys loops and blocks the election | confirmed, reproduced | only an active node answers; a standby asks only an active peer |
+| `boot-standby` failure leaves "active" trusted | confirmed (reasoned) | first start of a boot (by kernel boot time, within 10 min) with "active" on disk: standby; marker written by the boot path, by the daemon and by the install script (so an upgrade is not a boot) |
+| Power loss between the standby view and the saved role turns active.xml into the view at the next boot | confirmed (reasoned) | the role is saved before the view (boot, demotion, recovery); the boot does not copy over active.xml while a demotion is recorded |
+| Split-brain loser cannot stand down with `/conf` full | confirmed (reasoned) | stands down from the configuration in use, keeps config.xml as it is |
+| Demotion waits for the background work of the promotion before taking the identity down | confirmed | waits after the devices are down; the background work stops when a demotion starts |
+| Missing identity not reported as replaced | confirmed | any new identity is reported; a paired node then goes to standby |
+| Takeover epoch below the known leader | confirmed | includes the highest accepted leader epoch |
+| Maintenance timestamps compared as strings | confirmed | compared as times |
+| Fencing command without its own process group | confirmed | own group and wait delay |
+| Unlock window of an update lost at a daemon restart (which the install script now does) | confirmed | saved in the state, restored at start |
+| Install script overwrote an existing maintenance window, and could close someone else's | confirmed | opens and closes only its own |
+| Different interface keys put the HA rules on another interface | confirmed | refused at pairing and at each sync |
+| Configuration apply trusted the exit status of the filter reload | confirmed | checks the output and pf |
+| CI did not analyse the FreeBSD build, nor ShellCheck the package scripts and syshooks | confirmed | added |
+| pkg kills what the install script starts (reaper) | not confirmed: checked on the lab, the restarted daemon kept running after `pkg add` | none |
+
+Simulated (Go tests on fakes of the system) vs real: the model tests prove the decision logic only; the daemon-dead guard, a crash of the whole machine, the in-place upgrade of the plugin on both nodes and the merge with different keys were run on the OPNsense lab (two Supermicro servers, Intel X710, MikroTik switch). The boot check, the demotion with a full `/conf` and the reordering after a power loss were not reproduced on the hardware.

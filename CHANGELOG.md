@@ -2,6 +2,22 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 1.0.5
+An independent audit of 11372fc, then two independent reviews of the whole repository; see [audit](docs/audit.md#eleventh-round-105-the-audit-of-11372fc). Each finding was checked in the code before it was acted on; the HA findings were reproduced by a test that failed before the fix.
+### Fixed
+- **The daemon of the active node dead or hung while its system still forwards** (killed with its supervisor, `SIGSTOP`, stopped by hand): the standby took the silence for a dead peer and both nodes held the shared IP and MAC. Before a takeover after a silence the standby now pings the peer system on the HA link and on management: an answer means the machine runs, and without a fencing command the standby does not take over (it says why). **Verified on the two Supermicro servers**: with the daemon of the active node frozen for 20 s the standby refused; a real crash of the whole machine (`reboot -q`) was still taken over (detection 4.5 s) and the crashed node came back as standby.
+- **Plugin installation against a promotion**: a promotion that started between the role check of an installation and its registration found nothing to stop (reproduced by a test). The check and the registration now happen under the lock the promotion takes; a second installation is refused instead of waiting behind one that does not end.
+- **Hand-over between two standby nodes**: each asked the other and held its failover lock while waiting, a loop that blocked the election of both. Only an active node answers a hand-over, and a standby asks only an active peer.
+- **Boot**: a paired node that is "active" on disk at the first start of a boot (the standby path of the boot failed: full or read-only `/conf`) goes to standby; the boot no longer copies `config.xml` over `active.xml` while a demotion is recorded; the role is saved before the standby view (boot, demotion, recovery), so a power loss in between cannot turn the saved configuration into the view.
+- **Demotion**: a node that cannot save its configuration (`/conf` full) still stands down (a split-brain loser stayed active); the role is saved as soon as the devices are down; the background work of the last promotion no longer delays taking the identity down.
+- A missing TLS identity on a paired node is treated as replaced (the node goes to standby); the epoch of a takeover is above the highest leader epoch known; maintenance changes are compared as times; the fencing command runs in its own process group; a configuration apply checks pf after the reload; the window in which an update may write the configuration of a standby survives a restart of the daemon.
+- **Different HA or management interface keys on the two nodes** are refused at pairing and at each sync, instead of putting the active node's HA rules on another interface of the standby (which cut its HA link).
+- The package install script leaves an existing maintenance window alone and closes only the one it opened; it lives in `build/pkg-scripts` and is checked by ShellCheck.
+### CI
+- staticcheck and govulncheck also for FreeBSD (the binary that ships); ShellCheck covers the syshooks and the package scripts.
+### Tests
+- Deterministic interleavings of an installation and a promotion (both orders, an installation that ignores its cancellation); a dead daemon on a live system with and without fencing; a hand-over between two standbys; the first start of a boot; the takeover epoch; maintenance ordering; the unlock window across a restart; different interface keys.
+
 ## 1.0.4
 A third pass over the audit brief (`todo/version-1.x.md`), on the points left open in 1.0.3; see [audit](docs/audit.md#ninth-round-104-the-points-left-open).
 ### Fixed
