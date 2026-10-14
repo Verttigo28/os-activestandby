@@ -243,3 +243,17 @@ A long-lived TCP session through the firewalls, without any PC: the MikroTik run
 | Control: the pf states flushed on the new active node right after a failover | the session resets (uptime back to 1 s): the test does detect a missing state |
 
 This is what the pfsync replication is for; it was already visible on the standby (the ruleset of the standby has no rule for these connections, yet they continue).
+
+### J6. Guided upgrade and plugin synchronisation on the two lab nodes (1.0.5, dev builds 1.0.5.d2 to d5)
+
+Run on the two nodes of the lab (`opn-test`, `opn-test2`, a VM pair), with development builds of this plugin built from the tree of the commit that became 1.0.5. Before the run, `opn-test2` (active) really had the kernel and the base system to update (15.1-RELEASE-p1 against p4); `opn-test` was already on p4.
+
+| Test | Result |
+|---|---|
+| Plugin synchronisation: the older node fetches the package of the newer one (d2 to d3, d3 to d4, d4 to d5), the older node being the **active** one | works each time; the active node keeps its role, its daemon restarts inside a maintenance window |
+| Synchronisation towards a peer that has no such function (an older build) | clear refusal ("the peer runs a plugin older than this function"), nothing changed. First real run also showed that the peer's answer 202 was read as an error: fixed |
+| Maintenance window of the installation, ssh session ended right after `pkg add` | **found**: the window stayed on for an hour (its closing died with the session); fixed with a detached process, then verified: closed by itself in 15 s, also when the install is run by the daemon of the active node |
+| Guided upgrade, round 1 (standby already up to date), failover, round 2 (the old active node: kernel and base system to replace) | `launcher.sh update` installed `kernel-26.7.7` and `base-26.7.7`, wrote `***REBOOT***`; the standby went silent, the job took it for the end of the update (no second reboot request), waited, verified with a new check (nothing pending), switched the role and finished |
+| End state, read on both nodes | 15.1-RELEASE-p4 on both, update check of the second node re-run by the job (nothing pending), same plugin version, one active and one standby, maintenance off |
+
+Not exercised on hardware: an update that fails half way (the "Partial update failure" path is tested on its text only), a standby whose repository answers `Forbidden` during the verification, the failback option, the GUI page and its button (not opened in a browser: the controller passes `php -l` on the lab and the configd action `ctl_plugin_sync` answers there, the template was only read).
