@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,7 +18,29 @@ import (
 //
 // A command runs in its own process group, and on timeout the whole group is killed: a shell or a helper that started children
 // (php, pkg, opnsense-update) must not leave them running on their own after its caller gave up (cmd_unix.go).
-var cmdTimeout = 2 * time.Minute
+var cmdTimeoutV = struct {
+	mu sync.RWMutex
+	d  time.Duration
+}{d: 2 * time.Minute}
+
+func cmdTimeout() time.Duration {
+	cmdTimeoutV.mu.RLock()
+	defer cmdTimeoutV.mu.RUnlock()
+	return cmdTimeoutV.d
+}
+
+// setCmdTimeout changes the bound (the tests shorten it) and returns the function that restores it.
+func setCmdTimeout(d time.Duration) (restore func()) {
+	cmdTimeoutV.mu.Lock()
+	old := cmdTimeoutV.d
+	cmdTimeoutV.d = d
+	cmdTimeoutV.mu.Unlock()
+	return func() {
+		cmdTimeoutV.mu.Lock()
+		cmdTimeoutV.d = old
+		cmdTimeoutV.mu.Unlock()
+	}
+}
 
 // updateTimeout bounds the software update of a standby during the guided upgrade (opnsense-update and pkg upgrade through the
 // proxy of the active node can take long on a slow link).
@@ -27,7 +50,7 @@ var errCmdTimeout = errors.New("did not finish in time and was stopped")
 
 // boundedCmd runs name with args within cmdTimeout; combined: stdout and stderr together (like CombinedOutput), otherwise stdout only.
 func boundedCmd(combined bool, name string, args ...string) ([]byte, error) {
-	return boundedCmdFor(cmdTimeout, combined, name, args...)
+	return boundedCmdFor(cmdTimeout(), combined, name, args...)
 }
 
 func boundedCmdFor(limit time.Duration, combined bool, name string, args ...string) ([]byte, error) {

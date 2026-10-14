@@ -245,9 +245,8 @@ func TestFailoverUnderPacketLossAndLateDelivery(t *testing.T) {
 // without touching the file system, so that a refused rename of the wasm test runner on Windows cannot look like a protocol failure.
 func reliableDisk(t *testing.T) {
 	t.Helper()
-	old := fsWrite
-	fsWrite = func(string, []byte, os.FileMode) error { return nil }
-	t.Cleanup(func() { fsWrite = old })
+	restore := setFsWrite(func(string, []byte, os.FileMode) error { return nil })
+	t.Cleanup(restore)
 }
 
 // delayedLink carries each request of a to b in `delay` and its answer back in another `delay`; the caller gives up after

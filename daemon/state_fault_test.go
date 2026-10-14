@@ -17,20 +17,19 @@ import (
 // restart reads is never an "active" that nobody confirmed.
 
 // failDisk makes the durable write fail for the files whose name ends with one of the suffixes; the others are written for real.
-func failDisk(t *testing.T, err error, suffixes ...string) *int {
+func failDisk(t *testing.T, err error, suffixes ...string) *atomic.Int64 {
 	t.Helper()
-	calls := new(int)
-	old := fsWrite
-	fsWrite = func(path string, data []byte, perm os.FileMode) error {
-		*calls++
+	calls := new(atomic.Int64)
+	restore := setFsWrite(func(path string, data []byte, perm os.FileMode) error {
+		calls.Add(1)
 		for _, s := range suffixes {
 			if strings.HasSuffix(path, s) {
 				return err
 			}
 		}
-		return old(path, data, perm)
-	}
-	t.Cleanup(func() { fsWrite = old })
+		return writeFileDurable(path, data, perm)
+	})
+	t.Cleanup(restore)
 	return calls
 }
 

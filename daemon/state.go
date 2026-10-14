@@ -155,8 +155,34 @@ func (s *Store) Get() State {
 	return s.data.clone()
 }
 
-// fsWrite is the durable write of the state files (a variable so that the tests can make the disk fail).
-var fsWrite = writeFileDurable
+// fsWrite is the durable write of the state files (replaceable by the tests, see setFsWrite).
+var fsHook struct {
+	mu sync.RWMutex
+	f  func(string, []byte, os.FileMode) error // nil: writeFileDurable
+}
+
+func fsWrite(path string, data []byte, perm os.FileMode) error {
+	fsHook.mu.RLock()
+	f := fsHook.f
+	fsHook.mu.RUnlock()
+	if f != nil {
+		return f(path, data, perm)
+	}
+	return writeFileDurable(path, data, perm)
+}
+
+// setFsWrite replaces the durable write (the tests make the disk fail) and returns the function that restores it.
+func setFsWrite(f func(string, []byte, os.FileMode) error) (restore func()) {
+	fsHook.mu.Lock()
+	old := fsHook.f
+	fsHook.f = f
+	fsHook.mu.Unlock()
+	return func() {
+		fsHook.mu.Lock()
+		fsHook.f = old
+		fsHook.mu.Unlock()
+	}
+}
 
 // Update applies f to a copy of the state, validates and saves it, and only then publishes it to the readers.
 // The commit point is the rename of state.json (written and flushed first, then the .bak copy). If anything before it fails, nothing

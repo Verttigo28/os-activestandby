@@ -16,9 +16,7 @@ func TestHangingCommandIsStopped(t *testing.T) {
 	if _, err := exec.LookPath("sleep"); err != nil {
 		t.Skip("no sleep command")
 	}
-	old := cmdTimeout
-	cmdTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { cmdTimeout = old })
+	t.Cleanup(setCmdTimeout(200 * time.Millisecond))
 	t0 := time.Now()
 	_, err := sh("sleep", "30")
 	if !errors.Is(err, errCmdTimeout) {

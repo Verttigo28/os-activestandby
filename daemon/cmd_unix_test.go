@@ -13,9 +13,7 @@ import (
 
 // a command stopped on timeout takes its children with it (a shell that started opnsense-update or pkg must not leave them running)
 func TestTimeoutKillsTheWholeProcessGroup(t *testing.T) {
-	old := cmdTimeout
-	cmdTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { cmdTimeout = old })
+	t.Cleanup(setCmdTimeout(300 * time.Millisecond))
 	out, err := sh("/bin/sh", "-c", "sleep 30 & echo $!; wait")
 	if !errors.Is(err, errCmdTimeout) {
 		t.Fatalf("err = %v", err)
