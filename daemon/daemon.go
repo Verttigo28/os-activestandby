@@ -163,6 +163,9 @@ func runDaemon() error {
 	}
 	d.event("info", "hasyncd %s started (role %s, state %s%s)", version, st.Get().Role, st.Get().State, map[bool]string{true: ", STATE FILES WERE UNREADABLE", false: ""}[st.Get().Corrupt])
 
+	// a promotion or demotion that the last run of the daemon did not finish (intent.go): back to standby before anything acts on the role
+	d.recoverTransition()
+
 	listen := os.Getenv("HASYNC_LISTEN") // dev/test override, e.g. 127.0.0.1:7690
 	if listen == "" {
 		if d.cfg.HADevice == "" {

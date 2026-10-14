@@ -49,6 +49,7 @@ type hbMsg struct {
 	Warm    string `json:"warm,omitempty"`    // warm standby: "ready", or why this node could not take over fast (empty: classic mode)
 	Ruleset string `json:"ruleset,omitempty"` // hot standby: hash of the active node's ruleset it holds (ruleset.go)
 	Proto   int    `json:"proto,omitempty"`   // protocol version of the sender (proto.go); absent = 1
+	Inc     int64  `json:"inc,omitempty"`     // incarnation of the sender daemon (with Seq: older messages are told from newer ones)
 
 	Links        map[string]bool `json:"links,omitempty"`         // carrier of the sender's data devices
 	LinksUnknown []string        `json:"links_unknown,omitempty"` // data devices whose link cannot be read (a standby keeps them down)
@@ -73,10 +74,15 @@ type Heartbeat struct {
 	seq      uint64
 	started  time.Time
 	rtt      map[string]time.Duration
+	inc      int64 // incarnation of this daemon (its start time): the peer tells a restart from a reordered message
+	peerInc  int64 // incarnation and last sequence number taken from the peer
+	peerSeq  uint64
+	stale    uint64 // messages of the peer that arrived after a newer one (counted, ignored)
 }
 
 func newHeartbeat() *Heartbeat {
-	return &Heartbeat{pathLast: map[string]time.Time{}, started: time.Now(), rtt: map[string]time.Duration{}}
+	now := time.Now()
+	return &Heartbeat{pathLast: map[string]time.Time{}, started: now, inc: now.UnixNano(), rtt: map[string]time.Duration{}}
 }
 
 func (h *Heartbeat) setRTT(path string, d time.Duration) {
@@ -92,11 +98,22 @@ func (h *Heartbeat) RTT(path string) time.Duration {
 	return h.rtt[path]
 }
 
-func (h *Heartbeat) seen(path string, m hbMsg) {
+// seen records a heartbeat (or the answer to one) of the peer and reports whether it was taken. Two paths deliver them, at different
+// speeds, and an answer can be delayed: a message that is older than one already taken (same incarnation of the peer daemon, a
+// sequence number not above the last one) carries an old state and an old proof of life, so it changes nothing. A peer daemon that
+// restarted has a new incarnation and starts again at sequence 1. A peer that sends no incarnation (plugin 1.0.3 and older) is taken
+// as before.
+func (h *Heartbeat) seen(path string, m hbMsg) bool {
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	if m.Inc != 0 && m.Inc == h.peerInc && m.Seq <= h.peerSeq {
+		h.stale++
+		return false
+	}
+	h.peerInc, h.peerSeq = m.Inc, m.Seq
 	now := time.Now()
 	h.pathLast[path], h.last, h.peer = now, now, m
-	h.mu.Unlock()
+	return true
 }
 
 func (h *Heartbeat) PathAlive(path string) bool {
@@ -138,7 +155,7 @@ func (d *Daemon) localHB() hbMsg {
 	d.hb.seq++
 	s := d.hb.seq
 	d.hb.mu.Unlock()
-	return hbMsg{Role: st.Role, State: st.State, Epoch: st.Epoch, Proto: protoVersion, Seq: s, Mgmt: d.mgmtAddr(), TimeMs: time.Now().UnixMilli(), Ver: d.localVer, Plug: version,
+	return hbMsg{Role: st.Role, State: st.State, Epoch: st.Epoch, Proto: protoVersion, Inc: d.hb.inc, Seq: s, Mgmt: d.mgmtAddr(), TimeMs: time.Now().UnixMilli(), Ver: d.localVer, Plug: version,
 		Resync:       st.State == StateStandby && st.PeerFP != "" && (!activeValid(d.store.dir) || d.driftDetected()),
 		Links:        d.health.snapshotLinks(),
 		LinksUnknown: d.health.snapshotUnknown(),
@@ -154,8 +171,7 @@ func (d *Daemon) handleHB(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var m hbMsg
-	if json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&m) == nil {
-		d.hb.seen(path, m)
+	if json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&m) == nil && d.hb.seen(path, m) {
 		d.learnPeerMgmt(m.Mgmt)
 		d.peerWantsResync(m)
 		d.adjustClock(m)
@@ -200,9 +216,8 @@ func (d *Daemon) hbPath(path string, addrOf func(State) string) {
 			continue
 		}
 		var m hbMsg
-		if json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&m) == nil && resp.StatusCode == 200 {
+		if json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&m) == nil && resp.StatusCode == 200 && d.hb.seen(path, m) {
 			d.hb.setRTT(path, time.Since(t0))
-			d.hb.seen(path, m)
 			d.learnPeerMgmt(m.Mgmt)
 			d.peerWantsResync(m)
 			d.adjustClock(m)
@@ -294,7 +309,8 @@ func (d *Daemon) failover(force bool) (string, error) {
 		fired = true
 		sentAt = time.Now()
 		go func() {
-			_, perr = d.callPeer(fmt.Sprintf("/v1/promote?tid=%s&epoch=%d&exp=%d", tid, st.Epoch, sentAt.Add(reqTTL).UnixMilli()), promoteReplyTimeout)
+			ttl, _ := requestValidity()
+			_, perr = d.callPeer(fmt.Sprintf("/v1/promote?tid=%s&epoch=%d&exp=%d", tid, st.Epoch, sentAt.Add(ttl).UnixMilli()), promoteReplyTimeout)
 			close(done)
 		}()
 	})
@@ -407,4 +423,10 @@ func (h *Heartbeat) rebase() {
 		h.pathLast[p] = now
 	}
 	h.started = now
+}
+
+func (h *Heartbeat) staleCount() uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.stale
 }

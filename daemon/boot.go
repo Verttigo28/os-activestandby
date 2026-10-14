@@ -28,7 +28,12 @@ func bootStandby() error {
 		return err
 	}
 	writeRoleMarker(State{PeerFP: s.PeerFP, State: StateStandby})
-	return st.Update(func(x *State) { x.State = StateStandby })
+	if err := st.Update(func(x *State) { x.State = StateStandby }); err != nil {
+		return err
+	}
+	// a transition that was running when the machine went down is over: the node is standby again (intent.go)
+	os.Remove(intentPath(st.dir))
+	return nil
 }
 
 // bootGuard runs from the early syshook (detached) while a paired node boots into standby. OPNsense raises

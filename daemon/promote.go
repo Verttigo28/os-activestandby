@@ -35,11 +35,9 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	} else {
 		log.Printf("promote: could not refresh local parts (%v: %s), using active.xml as is", err, o)
 	}
-	unlockConfig()
-	if err := copyFile(full, configPath(), 0o640); err != nil {
-		return err
-	}
-	// from here on a failure must not leave the full config (shared IPs/MACs) on a node that stays standby
+	// The first change of the machine follows: from here on a failure must not leave the full config (shared IPs/MACs) on a node
+	// that stays standby, and a daemon that stops in the middle must be detected at its restart (intent.go).
+	d.beginIntent(intentPromote, reason)
 	earlyStarted := false // the full ruleset is loaded before the interfaces are up (below)
 	// the two things that run in the background of the interface bring-up; the cleanup below waits for both, otherwise it
 	// would rewrite the configuration and reload the packet filter while they are still generating from the full one
@@ -54,16 +52,24 @@ func (d *Daemon) promote(reason string) (retErr error) {
 				<-routesDone
 			}
 			log.Printf("promote failed (%v): back to the standby view", retErr)
-			if err := d.writeStandbyView(full); err != nil {
-				log.Printf("promote cleanup: %v", err)
+			viewErr := d.writeStandbyView(full)
+			if viewErr != nil {
+				log.Printf("promote cleanup: %v", viewErr)
 			}
 			d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 			d.enforceOnce()
 			if earlyStarted {
 				sh("configctl", "filter", "reload") // the ruleset of the standby view again
 			}
+			if viewErr == nil { // back where it started; otherwise the record makes a restart redo the standby view
+				d.endIntent()
+			}
 		}
 	}()
+	unlockConfig()
+	if err := copyFile(full, configPath(), 0o640); err != nil {
+		return err
+	}
 	ph.mark("full config restored")
 	set, err := loadIfaces(full)
 	if err != nil {
@@ -281,7 +287,7 @@ func (d *Daemon) promote(reason string) (retErr error) {
 
 // commitActive is the commit point of a takeover. The interfaces, the ruleset and the services are up already, so this node IS
 // serving: the memory must say so even if the disk refuses (UpdateSafe publishes it). The failure is then loud: the node is marked
-// degraded, and after a restart it would read its old file and boot as a silent standby, which is the safe direction. Returning an
+// degraded, the transition record stays, and a restart (of the daemon or of the machine) brings it back to standby: the safe direction. Returning an
 // error here instead would tell the peer that the promotion failed while this node forwards traffic.
 func (d *Daemon) commitActive() {
 	err := d.store.UpdateSafe(func(s *State) {
@@ -294,8 +300,12 @@ func (d *Daemon) commitActive() {
 		s.AckedSHA = "" // the new active node pushes its full config to the new standby, so both sides converge
 	})
 	if err != nil {
-		d.markDegraded("the new role could not be saved to disk (%v): a restart would boot this node as standby", err)
+		// the transition record stays: a restart of the daemon (or a reboot) brings this node back to standby, because the takeover
+		// is not durable
+		d.markDegraded("the new role could not be saved to disk (%v): a restart of the daemon or a reboot brings this node back to standby", err)
+		return
 	}
+	d.endIntent()
 }
 
 // boundServices are services that bind to interface addresses and do not notice that the addresses came back. When one

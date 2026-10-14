@@ -107,6 +107,10 @@ func (d *Daemon) ctlStatus(w http.ResponseWriter, r *http.Request) {
 		"os_version": d.localVer, "maintenance": d.maintenanceOn(), "maintenance_until": st.MaintenanceUntil,
 		"health": d.healthReason(), "degraded": d.degradedReason(), "pfsync_problem": d.pfsyncStatus(), "package_diff": d.packageReport(), "warm": d.warmInfo(), "ruleset_mirror": d.rulesetStatus(), "failover_in_progress": d.failing.Load(), "drift": d.driftReason(), "fencing": d.cfg.FenceCommand != "", "preempt": d.cfg.Preempt,
 	}
+	if rec, err := readIntent(d.store.dir); rec != nil || err != nil {
+		out["transition_unfinished"] = true // a promotion or demotion is recorded as started and not finished (intent.go)
+	}
+	out["protocol"], out["fence_required"] = protoVersion, d.cfg.FenceRequired
 	if st.Kit != nil {
 		out["kit"] = map[string]string{"peer": st.Kit.Peer, "expires": st.Kit.Expires, "error": st.Kit.Error}
 	}

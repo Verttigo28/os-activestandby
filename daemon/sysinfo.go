@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -28,7 +27,7 @@ type Info struct {
 var virtualIf = regexp.MustCompile(`^(lo|pflog|pfsync|enc|bridge|vlan|lagg|gif|gre|tun|tap|vxlan|wg|ovpn|epair|ue|ipsec)[0-9]*$`)
 
 func run(name string, args ...string) string {
-	out, err := exec.Command(name, args...).Output()
+	out, err := boundedCmd(false, name, args...)
 	if err != nil {
 		return ""
 	}

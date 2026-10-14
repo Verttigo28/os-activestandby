@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -85,7 +84,7 @@ func activeXML(dir string) string { return filepath.Join(dir, "active.xml") }
 
 func loadIfaces(path string) (IfaceSet, error) {
 	var s IfaceSet
-	out, err := exec.Command(ifacesScript, "list", path).Output()
+	out, err := boundedCmd(false, ifacesScript, "list", path)
 	if err != nil {
 		return s, fmt.Errorf("ifaces.php list: %w", err)
 	}
@@ -106,7 +105,7 @@ func (o *Ops) ifaces(path string) (IfaceSet, error) {
 }
 
 func sh(name string, args ...string) (string, error) {
-	out, err := exec.Command(name, args...).CombinedOutput()
+	out, err := boundedCmd(true, name, args...)
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -125,7 +124,12 @@ func (d *Daemon) writeStandbyView(full string) error {
 	unlockConfig()
 	defer lockConfig()
 	tmp := configPath() + ".sbv"
-	os.WriteFile(tmp, nil, 0o600) // the helper writes into an existing file, so the standby view is never world-readable
+	// the helper writes into an existing file, so the standby view is never world-readable; created exclusively, so that nothing
+	// planted at that name (a symbolic link to another file) is followed and truncated
+	os.Remove(tmp)
+	if err := writeExcl(tmp, nil, 0o600); err != nil {
+		return fmt.Errorf("stdview: %w", err)
+	}
 	if out, err := sh(ifacesScript, "stdview", full, tmp); err != nil {
 		return fmt.Errorf("stdview: %v: %s", err, out)
 	}

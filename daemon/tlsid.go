@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"log"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -20,8 +21,14 @@ import (
 // Trust is never based on a CA: peers pin the SHA-256 of the DER certificate at pairing time.
 func loadOrCreateCert(dir string) (tls.Certificate, error) {
 	cp, kp := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
-	if c, err := tls.LoadX509KeyPair(cp, kp); err == nil {
+	c, err := tls.LoadX509KeyPair(cp, kp)
+	if err == nil {
 		return c, nil
+	}
+	if _, serr := os.Stat(cp); serr == nil {
+		// the files are there but unusable (damaged): a new identity is created, and a paired peer will refuse it until the pair is
+		// formed again. Said loudly, never silently.
+		log.Printf("ERROR: the TLS identity of this node (%s) cannot be loaded (%v): creating a new one; the peer will refuse this node until the pair is formed again", cp, err)
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -44,10 +51,12 @@ func loadOrCreateCert(dir string) (tls.Certificate, error) {
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	if err := os.WriteFile(cp, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+	// durable writes: a key torn by a power loss would make the next start create another identity, and the peer (which pins the
+	// fingerprint) would refuse this node until it is paired again
+	if err := writeFileDurable(kp, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb}), 0o600); err != nil {
 		return tls.Certificate{}, err
 	}
-	if err := os.WriteFile(kp, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb}), 0o600); err != nil {
+	if err := writeFileDurable(cp, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
 		return tls.Certificate{}, err
 	}
 	return tls.LoadX509KeyPair(cp, kp)

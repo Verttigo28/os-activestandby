@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -28,7 +27,7 @@ func peerHostPort(st State, port int) string { return net.JoinHostPort(st.PeerAd
 
 // execShell runs a fixed script through /bin/sh (never with operator input).
 func execShell(script string) (string, error) {
-	out, err := exec.Command("/bin/sh", "-c", script).CombinedOutput()
+	out, err := boundedCmd(true, "/bin/sh", "-c", script)
 	return string(out), err
 }
 

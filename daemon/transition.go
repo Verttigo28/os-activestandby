@@ -158,12 +158,13 @@ func (d *Daemon) handlePromote(w http.ResponseWriter, r *http.Request) {
 	// a request that arrives after its validity ran out was delayed (frozen peer, queued connection): the sender has given up on it;
 	// one whose validity is far in the future is not one this software sends (it would stay executable for a long time)
 	exp := time.UnixMilli(ms)
-	if time.Now().After(exp.Add(reqSkew)) {
+	ttl, skew := requestValidity()
+	if time.Now().After(exp.Add(skew)) {
 		d.event("warning", "ignored an expired promote request (it was valid until %s)", exp.UTC().Format(time.RFC3339))
 		writeJSON(w, 409, map[string]string{"error": "request expired"})
 		return
 	}
-	if exp.After(time.Now().Add(reqTTL + reqSkew)) {
+	if exp.After(time.Now().Add(ttl + skew)) {
 		d.event("warning", "ignored a promote request whose validity is too long (until %s)", exp.UTC().Format(time.RFC3339))
 		writeJSON(w, 400, map[string]string{"error": "validity too long"})
 		return
@@ -244,7 +245,7 @@ func (d *Daemon) resolveTransition(tid string, sentAt time.Time) (txOutcome, str
 			last = err.Error()
 			// nobody answers AND no heartbeat arrives on any path: the peer is down or cut off, which the automatic rules (isolation
 			// guard, fencing) handle. Waiting longer only delays them, but only once its late request can no longer be executed.
-			if alive, _, _ := d.hb.Snapshot(); !alive && time.Since(sentAt) > reqTTL+reqSkew+time.Second {
+			if alive, _, _ := d.hb.Snapshot(); !alive && time.Since(sentAt) > validFor()+time.Second {
 				return outcomeUnknown, last + "; silent on every heartbeat path and its request has expired"
 			}
 		}
@@ -259,13 +260,14 @@ func (d *Daemon) resolveTransition(tid string, sentAt time.Time) (txOutcome, str
 
 // actions lets the tests replace what touches the system and the network. Nil fields mean the real thing.
 type actions struct {
-	promote    func(reason string) error
-	demoteHook func(reason string, afterDown func()) error
-	peerCall   func(path string, timeout time.Duration) (map[string]any, error)
-	sh         func(name string, args ...string) (string, error)
-	plan       func(path string) (WarmPlan, error)
-	flush      func(dev string)
-	fence      func() error // replaces running the fencing command
+	promote     func(reason string) error
+	demoteHook  func(reason string, afterDown func()) error
+	peerCall    func(path string, timeout time.Duration) (map[string]any, error)
+	sh          func(name string, args ...string) (string, error)
+	plan        func(path string) (WarmPlan, error)
+	flush       func(dev string)
+	fence       func() error            // replaces running the fencing command
+	standbyView func(full string) error // replaces writing the standby view of config.xml
 }
 
 func (d *Daemon) doPromote(reason string) error {
@@ -309,3 +311,25 @@ func setResolveTiming(every, window time.Duration) (restore func()) {
 		timingMu.Unlock()
 	}
 }
+
+// requestValidity returns how long a promote request is valid and the clock difference allowed (guarded like resolveTiming).
+func requestValidity() (ttl, skew time.Duration) {
+	timingMu.RLock()
+	defer timingMu.RUnlock()
+	return reqTTL, reqSkew
+}
+
+// setRequestValidity changes them (the tests shorten them) and returns the function that restores them.
+func setRequestValidity(ttl, skew time.Duration) (restore func()) {
+	timingMu.Lock()
+	ot, ok := reqTTL, reqSkew
+	reqTTL, reqSkew = ttl, skew
+	timingMu.Unlock()
+	return func() {
+		timingMu.Lock()
+		reqTTL, reqSkew = ot, ok
+		timingMu.Unlock()
+	}
+}
+
+func validFor() time.Duration { ttl, skew := requestValidity(); return ttl + skew }

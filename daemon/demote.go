@@ -15,7 +15,7 @@ func (d *Daemon) demote(reason string) error { return d.demoteHook(reason, nil) 
 
 // demoteHook is demote with a callback that fires the moment the data interfaces are down (traffic has stopped), so the
 // peer can start taking over while this node still tidies up (stops IPsec/dpinger, rewrites its config).
-func (d *Daemon) demoteHook(reason string, afterDown func()) error {
+func (d *Daemon) demoteHook(reason string, afterDown func()) (retErr error) {
 	d.ops.mu.Lock()
 	defer d.ops.mu.Unlock()
 	d.ops.bg.Wait() // a DHCP/DNS restart started by the last promote must not run after we went standby
@@ -48,6 +48,19 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) error {
 		// interfaces. Refuse; the node stays as it is until the settings are back.
 		return errors.New("the saved configuration has no HA settings (was a backup restored without them?): refusing to stand down, which would cut the HA link; restore the Active/Standby settings first")
 	}
+	// the configuration is saved; the machine changes from here on (intent.go): a daemon that stops before the end is detected at
+	// its restart, and the steps after the devices went down are redone there
+	d.beginIntent(intentDemote, reason)
+	devicesDown := false
+	defer func() {
+		// Once the data interfaces are down this node does not serve, whatever failed afterwards (stopping a service, writing the
+		// standby view): its role must say so, otherwise it would answer "active" to the peer and to the election while it forwards
+		// nothing. The record stays, so a restart finishes the job.
+		if retErr != nil && devicesDown && d.store.Get().State != StateStandby {
+			d.store.UpdateSafe(func(s *State) { s.State = StateStandby })
+			d.event("error", "demotion incomplete (%v): the data interfaces are down and this node counts as STANDBY", retErr)
+		}
+	}()
 	// interfaces first (traffic stops immediately), then rewrite the config so nothing re-enables them
 	// warm standby: the devices of the eligible interfaces keep their link but lose the shared MAC and the addresses (in that
 	// order, see silenceCmds); everything else goes down as in the classic standby
@@ -59,6 +72,7 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) error {
 	}
 	fw.Wait()
 	step(t0, fmt.Sprintf("%d devices down", len(set.ForceDown)))
+	devicesDown = true
 	if afterDown != nil {
 		afterDown()
 	}
@@ -75,6 +89,9 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) error {
 	d.event("change", "demoted to STANDBY (%s)", reason)
 	// the data interfaces are down already: the memory must say standby even if the disk refuses (the failure is returned and logged)
 	err = d.store.UpdateSafe(func(s *State) { s.State = StateStandby })
+	if err == nil {
+		d.endIntent()
+	}
 	d.hist.add(HistoryEntry{Type: "demote", Reason: reason, DurationMs: time.Since(t0).Milliseconds(), Epoch: d.store.Get().Epoch})
 	d.recordIntegrity()
 	return err

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -246,4 +248,104 @@ func reliableDisk(t *testing.T) {
 	old := fsWrite
 	fsWrite = func(string, []byte, os.FileMode) error { return nil }
 	t.Cleanup(func() { fsWrite = old })
+}
+
+// delayedLink carries each request of a to b in `delay` and its answer back in another `delay`; the caller gives up after
+// `timeout`. A request that outlives the caller is still delivered later: the peer receives it after the requester has moved on.
+func delayedLink(b *Daemon, delay, timeout time.Duration, inflight *sync.WaitGroup) func(string, time.Duration) (map[string]any, error) {
+	type answer struct {
+		out map[string]any
+		err error
+	}
+	return func(path string, _ time.Duration) (map[string]any, error) {
+		ch := make(chan answer, 1)
+		inflight.Add(1)
+		go func() {
+			defer inflight.Done()
+			time.Sleep(delay)
+			out, err := deliver(b, path)
+			time.Sleep(delay)
+			ch <- answer{out, err}
+		}()
+		select {
+		case a := <-ch:
+			return a.out, a.err
+		case <-time.After(timeout):
+			return nil, fmt.Errorf("timeout after %s", timeout)
+		}
+	}
+}
+
+// Latency, on the scale of the timings of the protocol (all of them shortened by the same factor): an answer in time, an answer that
+// comes after the requester gave up, and a request that arrives after its own validity ran out. Whatever the delay, once every message
+// in flight has been delivered, the shared identity is on at most one node.
+func TestFailoverUnderLatency(t *testing.T) {
+	t.Cleanup(setResolveTiming(5*time.Millisecond, 400*time.Millisecond))
+	t.Cleanup(setRequestValidity(100*time.Millisecond, 0))
+	const timeout = 40 * time.Millisecond // how long the requester waits for one answer
+	for _, delay := range []time.Duration{
+		5 * time.Millisecond,   // well within everything
+		30 * time.Millisecond,  // the request arrives in time, the answer after the requester gave up
+		150 * time.Millisecond, // the request arrives after its validity: it must be refused
+	} {
+		t.Run(delay.String(), func(t *testing.T) {
+			m := newPairModel(t)
+			var inflight sync.WaitGroup
+			outcomes := map[string]int{}
+			for round := 1; round <= 12; round++ {
+				act := m.actives()
+				if len(act) == 0 {
+					m.a.auto.lastChange = time.Time{}
+					m.a.autoPromote("election", false)
+					act = m.actives()
+				}
+				x := act[0]
+				x.act.peerCall = delayedLink(m.other(x), delay, timeout, &inflight)
+				seePeer(x, hbMsg{State: StateStandby})
+				if _, err := x.failover(true); err == nil {
+					outcomes["done"]++
+				} else {
+					outcomes["error"]++
+				}
+				inflight.Wait() // every late request and answer has arrived
+				m.check(round, fmt.Sprintf("failover with a delay of %s", delay))
+			}
+			t.Logf("delay %s: %v", delay, outcomes)
+		})
+	}
+}
+
+// The hand-over leaves no goroutine behind: every failover above, with lost, late and duplicated messages, ends with as many
+// goroutines as before (a leak in the transition code would grow with every failover of a firewall that runs for years).
+func TestFailoversLeaveNoGoroutineBehind(t *testing.T) {
+	fastResolve(t)
+	m := newPairModel(t)
+	settle := func() int {
+		n := runtime.NumGoroutine()
+		for i := 0; i < 50; i++ {
+			time.Sleep(10 * time.Millisecond)
+			if c := runtime.NumGoroutine(); c <= n {
+				n = c
+			}
+		}
+		return n
+	}
+	before := settle()
+	rng := rand.New(rand.NewSource(5))
+	for round := 0; round < 40; round++ {
+		act := m.actives()
+		if len(act) == 0 {
+			m.a.auto.lastChange = time.Time{}
+			m.a.autoPromote("election", false)
+			continue
+		}
+		x := act[0]
+		var sent []string
+		x.act.peerCall = lossyLink(m.other(x), rng, 0.3, &sent)
+		seePeer(x, hbMsg{State: StateStandby})
+		x.failover(true)
+	}
+	if after := settle(); after > before+2 {
+		t.Fatalf("%d goroutines before 40 failovers, %d after", before, after)
+	}
 }

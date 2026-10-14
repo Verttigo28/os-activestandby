@@ -774,7 +774,7 @@ func TestExpiredPromoteRequestIsRefused(t *testing.T) {
 		t.Fatal("the late request promoted the node")
 	}
 	// within the allowed clock difference it is still valid
-	edge := time.Now().Add(-reqSkew / 2).UnixMilli()
+	edge := time.Now().Add(-validSkew() / 2).UnixMilli()
 	if _, err := deliver(b, fmt.Sprintf("/v1/promote?tid=%s&epoch=7&exp=%d", newTID(), edge)); err != nil {
 		t.Fatalf("a request just past its time but within the skew must be accepted: %v", err)
 	}
@@ -782,15 +782,15 @@ func TestExpiredPromoteRequestIsRefused(t *testing.T) {
 
 // promoteURL is a well-formed promote request: the transition id, the epoch of the sender and an expiry reqTTL from now.
 func promoteURL(tid string, epoch uint64) string {
-	return fmt.Sprintf("/v1/promote?tid=%s&epoch=%d&exp=%d", tid, epoch, time.Now().Add(reqTTL).UnixMilli())
+	return fmt.Sprintf("/v1/promote?tid=%s&epoch=%d&exp=%d", tid, epoch, time.Now().Add(validTTL()).UnixMilli())
 }
 
 // Every parameter of /v1/promote is required and strictly parsed. Nothing malformed may promote the node, and none may be
 // remembered as a transition (it must not use up an id or hide a later valid request).
 func TestPromoteRefusesMissingOrMalformedParameters(t *testing.T) {
 	good := newTID()
-	exp := time.Now().Add(reqTTL).UnixMilli()
-	far := time.Now().Add(reqTTL + reqSkew + time.Hour).UnixMilli()
+	exp := time.Now().Add(validTTL()).UnixMilli()
+	far := time.Now().Add(validFor() + time.Hour).UnixMilli()
 	for name, q := range map[string]string{
 		"no parameter":          "",
 		"tid absent":            fmt.Sprintf("epoch=7&exp=%d", exp),
@@ -864,9 +864,7 @@ func TestReplayAfterTheLogWasTrimmedIsRefusedByItsExpiry(t *testing.T) {
 
 func shortRequestValidity(t *testing.T) {
 	t.Helper()
-	oldTTL, oldSkew := reqTTL, reqSkew
-	reqTTL, reqSkew = 5*time.Millisecond, 0
-	t.Cleanup(func() { reqTTL, reqSkew = oldTTL, oldSkew })
+	t.Cleanup(setRequestValidity(5*time.Millisecond, 0))
 }
 
 func TestSilentUnreachablePeerEndsTheWaitEarly(t *testing.T) {
@@ -987,3 +985,6 @@ func TestFreezeGapFollowsTheDetectionTime(t *testing.T) {
 }
 
 func windowNow() time.Duration { _, w := resolveTiming(); return w }
+
+func validTTL() time.Duration  { t, _ := requestValidity(); return t }
+func validSkew() time.Duration { _, s := requestValidity(); return s }

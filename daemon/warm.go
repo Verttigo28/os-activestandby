@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -78,7 +77,7 @@ type LaggInfo struct {
 
 func loadPlan(path string) (WarmPlan, error) {
 	var p WarmPlan
-	out, err := exec.Command(ifacesScript, "plan", path).Output()
+	out, err := boundedCmd(false, ifacesScript, "plan", path)
 	if err != nil {
 		return p, fmt.Errorf("ifaces.php plan: %w", err)
 	}
