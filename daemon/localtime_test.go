@@ -12,9 +12,11 @@ func TestTimesInTheZoneOfTheFirewall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	oldFile := zoneFile
+	zoneFile = "/nonexistent/localtime" // the zone below, not the one of the machine that runs the test
 	old := time.Local
 	time.Local = ams
-	t.Cleanup(func() { time.Local = old })
+	t.Cleanup(func() { time.Local, zoneFile = old, oldFile })
 	for utc, want := range map[string]string{
 		"2026-10-14T05:58:23Z":           "2026-10-14 07:58:23", // summer time, UTC+2
 		"2026-12-01T05:58:23Z":           "2026-12-01 06:58:23", // winter time, UTC+1
