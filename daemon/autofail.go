@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -199,6 +200,19 @@ func (d *Daemon) autoStep() {
 				"(HA/management carrier or management probe down). Promote manually if the peer is really down.")
 			return
 		}
+		// The daemon of the peer may be what died (killed, hung, stopped by hand) while its system still forwards with the shared
+		// identity. Its system answering ping on the HA link or on management proves that much: then only fencing (switching it
+		// off) makes a takeover safe. No answer proves nothing more than before (a partition looks the same) and changes nothing.
+		if addr := d.peerSystemAnswers(st); addr != "" && d.cfg.FenceCommand == "" {
+			why := "the daemon of the peer is silent but its system still answers ping (" + addr + "): it may still forward traffic with the shared " +
+				"addresses. Not taking over by itself. Restart hasyncd on the peer, or switch the peer off and promote this node by hand " +
+				"(a fencing command makes this automatic)."
+			if d.auto.Blocked() != why {
+				d.event("error", "automatic takeover refused: %s", why)
+			}
+			d.auto.setBlocked(why)
+			return
+		}
 		d.autoPromote("peer lost on all heartbeat paths", true)
 	}
 }
@@ -281,4 +295,41 @@ func (d *Daemon) splitBrainStep(st State, alive bool, peer hbMsg) {
 	if err := d.doDemote("split-brain: peer wins (higher epoch or master role)", nil); err != nil {
 		d.event("error", "split-brain: standing down failed: %v (retrying)", err)
 	}
+}
+
+// peerSystemAnswers pings the system of the peer on the HA link and on its management address, at the same time, once each (300 ms).
+// It returns the first address that answered, "" if none did. The kernel answers ping without the daemon: an answer means that the
+// machine runs, whatever its daemon does.
+func (d *Daemon) peerSystemAnswers(st State) string {
+	addrs := []string{}
+	for _, a := range []string{st.PeerAddr, st.PeerMgmt} {
+		if a != "" && net.ParseIP(a).To4() != nil {
+			addrs = append(addrs, a)
+		}
+	}
+	res := make(chan string, len(addrs))
+	for _, a := range addrs {
+		go func(a string) {
+			if d.pingOnce(a) {
+				res <- a
+				return
+			}
+			res <- ""
+		}(a)
+	}
+	found := ""
+	for range addrs {
+		if a := <-res; a != "" && found == "" {
+			found = a
+		}
+	}
+	return found
+}
+
+func (d *Daemon) pingOnce(addr string) bool {
+	if d.act != nil && d.act.ping != nil {
+		return d.act.ping(addr)
+	}
+	_, err := sh("ping", "-c", "1", "-W", "300", "-q", addr) // FreeBSD: -W in milliseconds
+	return err == nil
 }

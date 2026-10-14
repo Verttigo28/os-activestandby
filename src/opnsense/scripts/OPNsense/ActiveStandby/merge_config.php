@@ -39,6 +39,18 @@ if ($mx->query('/opnsense/interfaces')->length === 0 || $mx->query('/opnsense/sy
     fail('active config has no interfaces/system section, refusing');
 }
 
+// The firewall rules of the active node name interfaces by their key. If the HA link is not the same key on both nodes, its rules
+// (the peer API, pfsync) would land on another interface here and this node would lose its HA link at the first push: refuse, the
+// sync fails visibly and nothing is applied.
+$keyOf = fn($x, $f) => trim($x->evaluate("string(/opnsense/OPNsense/ActiveStandby/general/$f)"));
+foreach (['ha_interface' => 'HA link', 'mgmt_interface' => 'management interface'] as $f => $what) {
+    $a = $keyOf($mx, $f);
+    $b = $keyOf($lx, $f);
+    if ($a !== '' && $b !== '' && $a !== $b) {
+        fail("the $what is interface $a on the active node and $b here: assign it to the same interface on both nodes");
+    }
+}
+
 $paths = ['/opnsense/system/hostname'];
 // The HA and management interfaces are node-local: those of THIS node are kept as they are here, and those of the ACTIVE node are
 // never imported, even when the two nodes use different interface keys. Otherwise the active's HA (or management) interface would

@@ -22,7 +22,7 @@ func newHANode(t *testing.T, st State) *Daemon {
 	dir := t.TempDir()
 	return &Daemon{
 		store: &Store{dir: dir, data: st},
-		ops:   &Ops{}, hb: newHeartbeat(), auto: &autoState{}, act: &actions{},
+		ops:   &Ops{}, hb: newHeartbeat(), auto: &autoState{}, act: &actions{ping: func(string) bool { return false }}, // the system of the peer does not answer unless a test says so
 		runIntent: filepath.Join(dir, "run.transition"), // each test node has its own second copy of the transition record
 	}
 }

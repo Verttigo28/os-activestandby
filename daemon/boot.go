@@ -1,7 +1,9 @@
 package main
 
 import (
+	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,22 +21,89 @@ func bootStandby() error {
 	}
 	d := &Daemon{store: st, ops: &Ops{}}
 	full := activeXML(st.dir)
-	if _, err := os.Stat(full); err != nil || s.State == StateActive || s.State == "" {
+	// config.xml is the full configuration only while the node was active and no demotion had started. A demotion saves active.xml
+	// before it changes anything (and leaves its record), then writes the standby view into config.xml: copying config.xml then
+	// would replace the full configuration with the view.
+	rec, _ := readIntent(st.dir, runIntentPath)
+	demoting := rec != nil && rec.Op == intentDemote
+	if _, err := os.Stat(full); err != nil || ((s.State == StateActive || s.State == "") && !demoting) {
 		if err := copyFile(configPath(), full, 0o600); err != nil {
 			return err
 		}
+	}
+	// the role first, then the view: whichever step a power loss interrupts, the next boot copies nothing over active.xml
+	if err := st.Update(func(x *State) { x.State = StateStandby }); err != nil {
+		return err
 	}
 	if err := d.writeStandbyView(full); err != nil {
 		return err
 	}
 	writeRoleMarker(State{PeerFP: s.PeerFP, State: StateStandby})
-	if err := st.Update(func(x *State) { x.State = StateStandby }); err != nil {
-		return err
-	}
 	// a transition that was running when the machine went down is over: the node is standby again (intent.go)
 	os.Remove(intentPath(st.dir))
 	os.Remove(runIntentPath)
+	markBootHandled() // the daemon then knows this boot went through the standby path
 	return nil
+}
+
+// bootMarker records the boot that went through the standby path (bootStandby) or that the daemon already checked. It holds the
+// kernel boot time, so a marker of an earlier boot never counts, whether /var/run is cleared at boot or not.
+const bootMarker = "/var/run/activestandby.boot"
+
+// bootTime returns the kernel boot time ("" if unknown; a variable for the tests).
+var bootTime = func() string {
+	out, err := sh("sysctl", "-n", "kern.boottime")
+	if err != nil {
+		return ""
+	}
+	// "{ sec = 1791900000, usec = 123456 } Wed Oct 14 ..."
+	if i := strings.Index(out, "sec = "); i >= 0 {
+		v := out[i+len("sec = "):]
+		if j := strings.IndexAny(v, ", }"); j > 0 {
+			return v[:j]
+		}
+	}
+	return ""
+}
+
+var bootMarkerPath = bootMarker // a variable for the tests
+
+// bootWindow: how long after the boot of the kernel a first start of the daemon counts as the start of that boot.
+const bootWindow = 10 * time.Minute
+
+func markBootHandled() {
+	if bt := bootTime(); bt != "" {
+		if err := fsWrite(bootMarkerPath, []byte(bt), 0o600); err != nil {
+			log.Printf("boot marker not written: %v", err)
+		}
+	}
+}
+
+// firstStartOfThisBoot: no marker of this boot. The boot path either did not run or failed, or the daemon has not yet checked.
+func firstStartOfThisBoot() bool {
+	bt := bootTime()
+	if bt == "" {
+		return false // unknown: no conclusion
+	}
+	// only right after a boot: a daemon (re)started later, by an upgrade of the plugin that predates the marker for example, is not
+	// the start of a boot, and an active node must not be taken down for that
+	if sec, err := strconv.ParseInt(bt, 10, 64); err != nil || time.Since(time.Unix(sec, 0)) > bootWindow {
+		return false
+	}
+	b, err := os.ReadFile(bootMarkerPath)
+	return err != nil || strings.TrimSpace(string(b)) != bt
+}
+
+// checkBoot runs once at the start of the daemon. A paired node that is "active" on disk at the first start of a boot did not go
+// through the standby path (bootStandby failed: a full or read-only /conf, a PHP error): a paired node never comes up active on
+// its own, so it goes to standby now, before anything acts on its role. Then the boot counts as checked.
+func (d *Daemon) checkBoot() {
+	st := d.store.Get()
+	if firstStartOfThisBoot() && st.PeerFP != "" && st.State == StateActive {
+		d.event("error", "this node starts as ACTIVE although it was just booted: the standby path of the boot did not complete. Going to STANDBY; the peer or the election decides who serves")
+		d.toSafeStandby("boot without the standby path", true)
+	}
+	markBootHandled()
 }
 
 // bootGuard runs from the early syshook (detached) while a paired node boots into standby. OPNsense raises

@@ -143,10 +143,30 @@ func (d *Daemon) ensureConfigLock() {
 		wasWindow := !d.unlockedUntil.Get().IsZero()
 		lockConfig()
 		if wasWindow { // the operator's unlock window ended: whatever was changed in it is accepted as the new baseline
-			d.unlockedUntil.Set(time.Time{})
+			d.setUnlocked(time.Time{})
 			d.recordIntegrity()
 		}
 	case st.State != StateStandby && locked:
 		unlockConfig()
+	}
+}
+
+// setUnlocked opens (until a time) or closes (zero) the window in which the configuration of a standby may be written. It is kept in
+// the state as well: a restart of the daemon in the middle of an update (the upgrade of this plugin restarts it) must not lock the
+// configuration again while the update's migrations still write it.
+func (d *Daemon) setUnlocked(until time.Time) {
+	d.unlockedUntil.Set(until)
+	v := ""
+	if !until.IsZero() {
+		v = until.UTC().Format(time.RFC3339)
+	}
+	d.store.UpdateSafe(func(s *State) { s.UnlockedUntil = v })
+}
+
+// restoreUnlocked reopens at start a window that a previous run of the daemon opened and that is not over.
+func (d *Daemon) restoreUnlocked() {
+	if t, err := time.Parse(time.RFC3339, d.store.Get().UnlockedUntil); err == nil && time.Now().Before(t) {
+		d.unlockedUntil.Set(t)
+		log.Printf("the configuration stays writable until %s (window opened before this start)", t.Format(time.RFC3339))
 	}
 }

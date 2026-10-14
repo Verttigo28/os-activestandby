@@ -17,8 +17,9 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	t0 := time.Now()
 	ph := &phaseLog{t0: t0}
 	log.Printf("PROMOTE (%s)", reason)
-	d.rs.set("")           // a node that becomes active holds its own ruleset, not a mirror
-	d.stopPackageInstall() // a plugin installation must not run next to the takeover
+	d.rs.set("")            // a node that becomes active holds its own ruleset, not a mirror
+	d.blockPackageInstall() // no plugin installation runs next to the takeover
+	defer d.unblockPackageInstall()
 	if d.store.Get().State == StateActive {
 		return nil
 	}
@@ -269,9 +270,14 @@ func (d *Daemon) promote(reason string) (retErr error) {
 		if err != nil {
 			bad = append(bad, "DHCP and DNS restart")
 		}
-		bad = append(bad, restartBoundServices()...)
-		_, failed := d.startStoppedServices()
-		bad = append(bad, failed...)
+		// a demotion that started meanwhile has taken the identity down: nothing more is started on a node that stands down
+		if !d.standingDown.Load() {
+			bad = append(bad, restartBoundServices()...)
+		}
+		if !d.standingDown.Load() {
+			_, failed := d.startStoppedServices()
+			bad = append(bad, failed...)
+		}
 		// a node that is already standby again (a quick hand-back) has nothing to report
 		if len(bad) > 0 && d.store.Get().State == StateActive {
 			d.markDegraded("services that did not start after the takeover: %s", strings.Join(bad, ", "))
@@ -295,6 +301,11 @@ func (d *Daemon) promote(reason string) (retErr error) {
 func (d *Daemon) commitActive() {
 	err := d.store.UpdateSafe(func(s *State) {
 		_, _, pe := d.hb.Snapshot()
+		// the highest generation known: the peer's heartbeat, and the highest epoch of the leader whose pushes this node accepted (the
+		// heartbeat is empty after a restart of this daemon while the peer is silent)
+		if s.LeaderEpoch > s.Epoch {
+			s.Epoch = s.LeaderEpoch
+		}
 		if pe.Epoch > s.Epoch {
 			s.Epoch = pe.Epoch
 		}

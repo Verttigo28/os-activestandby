@@ -274,6 +274,12 @@ func (d *Daemon) peerCall(path string, timeout time.Duration) (map[string]any, e
 
 // handleHandover: the standby asks us (active) to hand over: we demote, then ask it to promote.
 func (d *Daemon) handleHandover(w http.ResponseWriter, r *http.Request) {
+	// only an active node hands over: a standby that would forward the request to its peer could meet the same request coming back
+	// (two standbys asking each other, each holding its failover lock while waiting for the other)
+	if d.store.Get().State != StateActive {
+		writeJSON(w, 409, map[string]string{"error": "this node is not active: it has nothing to hand over"})
+		return
+	}
 	msg, err := d.failover(r.URL.Query().Get("force") == "1")
 	if err != nil {
 		writeJSON(w, 409, map[string]string{"error": err.Error()})
@@ -299,6 +305,10 @@ func (d *Daemon) failover(force bool) (string, error) {
 		return "", errors.New(why)
 	}
 	if st.State != StateActive {
+		// a standby asks the peer to hand over only when the peer says it is active
+		if alive, _, peer := d.hb.Snapshot(); !alive || peer.State != StateActive {
+			return "", errors.New("no active node to hand over: the peer is not active (or not heard); promote this node instead")
+		}
 		if _, err := d.callPeer(map[bool]string{true: "/v1/handover?force=1", false: "/v1/handover"}[force], handoverTimeout); err != nil {
 			return "", fmt.Errorf("handover request to active peer failed: %w", err)
 		}

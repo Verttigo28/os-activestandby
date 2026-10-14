@@ -95,6 +95,7 @@ type Daemon struct {
 	cfgProblem    string        // the settings file could not be read in full (loadConfigChecked): what is used instead
 	pkgr          pkgRun        // the plugin installation in progress (packages.go)
 	maintExpiring atomic.Bool   // the end of the maintenance mode is being written (maintenance.go)
+	standingDown  atomic.Bool   // a demotion runs (demote.go): the background work of a promotion starts nothing more
 }
 
 func loadConfig() Config {
@@ -207,6 +208,8 @@ func runDaemon() error {
 	if d.cfgProblem != "" {
 		d.event("error", "plugin settings: %s", d.cfgProblem)
 	}
+	d.restoreUnlocked() // an update in progress keeps its writable configuration across a restart of the daemon
+	d.checkBoot()       // the first start of a boot: a node that did not go through the standby path goes to standby
 	// a promotion or demotion that the last run of the daemon did not finish (intent.go): back to standby before anything acts on the role
 	d.recoverTransition()
 	if identityReplaced && st.Get().PeerFP != "" {

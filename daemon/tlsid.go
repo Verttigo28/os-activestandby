@@ -58,7 +58,9 @@ func loadIdentity(dir string) (cert tls.Certificate, replaced bool, err error) {
 		return tls.Certificate{}, existed, err
 	}
 	backupIdentity(cp, kp, cb, kb)
-	return c, existed, nil
+	// replaced: a new identity, whether the old one was damaged or is gone altogether (files lost, a node of 1.0.3 without the backup
+	// copy): either way a paired peer will not recognise it. For a node that was never paired the caller ignores it.
+	return c, true, nil
 }
 
 // backupIdentity keeps the .bak copies equal to the identity in use.

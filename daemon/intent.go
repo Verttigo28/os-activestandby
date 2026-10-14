@@ -155,6 +155,15 @@ func (d *Daemon) toSafeStandby(why string, saveActive bool) bool {
 			d.event("error", "%s: the configuration in use could not be saved (%v)", why, err)
 		}
 	}
+	// the role before the view: a power loss in between must not leave "active" on disk with the view in config.xml (the next boot
+	// would copy that view over active.xml)
+	saveErr := d.store.UpdateSafe(func(s *State) { s.State = StateStandby })
+	if saveErr != nil {
+		d.event("error", "%s: the standby role could not be saved (%v)", why, saveErr)
+	}
+	// the devices down at once (from the saved configuration, or the one in use): the view is generated afterwards
+	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
+	d.enforceOnce()
 	viewOK := false
 	if activeValid(d.store.dir) {
 		if err := d.doStandbyView(full); err != nil {
@@ -164,10 +173,6 @@ func (d *Daemon) toSafeStandby(why string, saveActive bool) bool {
 		}
 	} else {
 		d.event("error", "%s: no valid saved configuration (active.xml); the devices are kept down from the configuration in use, a full resync from the active node is needed", why)
-	}
-	saveErr := d.store.UpdateSafe(func(s *State) { s.State = StateStandby })
-	if saveErr != nil {
-		d.event("error", "%s: the standby role could not be saved (%v)", why, saveErr)
 	}
 	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 	d.enforceOnce()

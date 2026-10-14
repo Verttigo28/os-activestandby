@@ -13,8 +13,8 @@ func TestIdentityIsPreserved(t *testing.T) {
 	fixedAside(t)
 	dir := t.TempDir()
 	first, replaced, err := loadIdentity(dir)
-	if err != nil || replaced {
-		t.Fatalf("first start: %v replaced=%v", err, replaced)
+	if err != nil || !replaced {
+		t.Fatalf("first start: a new identity is reported as such (the caller ignores it on a node that is not paired): %v replaced=%v", err, replaced)
 	}
 	fp := fingerprint(first.Certificate[0])
 	read := func() string {

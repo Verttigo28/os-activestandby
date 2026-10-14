@@ -44,6 +44,8 @@ type State struct {
 	Maintenance      bool   `json:"maintenance,omitempty"`
 	MaintenanceUntil string `json:"maintenance_until,omitempty"` // safety: switches itself off
 	MaintAt          string `json:"maint_at,omitempty"`          // time of the last change; the newest change wins between the nodes
+	// UnlockedUntil: the configuration of this standby may be written until then (an update, see setUnlocked)
+	UnlockedUntil string `json:"unlocked_until,omitempty"`
 	// Integrity hashes of the files this daemon wrote on a standby; a mismatch means someone changed them (drift).
 	ActiveSHA string `json:"active_sha,omitempty"`
 	// SettingsSHA fingerprints the shared plugin settings last applied here; a change re-renders the daemon config and restarts it.

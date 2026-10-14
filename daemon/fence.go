@@ -71,7 +71,10 @@ func (d *Daemon) runFence() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), fenceTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, cmdPath, "promote", d.store.Get().PeerAddr).CombinedOutput()
+	cmd := exec.CommandContext(ctx, cmdPath, "promote", d.store.Get().PeerAddr)
+	ownGroup(cmd)                   // a child of the script (ipmitool, ssh) goes with it on timeout
+	cmd.WaitDelay = 5 * time.Second // and does not hold the output open: the election loop waits for this command
+	out, err := cmd.CombinedOutput()
 	msg := strings.TrimSpace(string(out))
 	if len(msg) > 300 {
 		msg = msg[len(msg)-300:]

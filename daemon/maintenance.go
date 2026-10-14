@@ -81,7 +81,12 @@ func (d *Daemon) reconcileMaintenance(m hbMsg) {
 			return
 		}
 	}
-	if m.MaintAt == "" || m.MaintAt <= st.MaintAt { // RFC3339Nano UTC strings sort chronologically
+	// compared as times: RFC3339Nano drops trailing zeros, so the strings do not sort chronologically (".1Z" > ".15Z")
+	peerAt, err := time.Parse(time.RFC3339Nano, m.MaintAt)
+	if err != nil {
+		return
+	}
+	if ownAt, err := time.Parse(time.RFC3339Nano, st.MaintAt); err == nil && !peerAt.After(ownAt) {
 		return
 	}
 	d.store.Update(func(s *State) { s.Maintenance, s.MaintenanceUntil, s.MaintAt = m.Maint, m.MaintUntil, m.MaintAt })

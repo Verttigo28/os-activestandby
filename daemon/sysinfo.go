@@ -22,6 +22,10 @@ type Info struct {
 	Arch     string            `json:"arch"`
 	NICs     []NIC             `json:"nics"`
 	Packages map[string]string `json:"packages"`
+	// the keys of the HA and management interfaces (opt1, ...): the firewall rules replicated from the active node name interfaces by
+	// their key, so both nodes must use the same ones (empty: not set, or a node of 1.0.4 and older that does not send them)
+	HAKey   string `json:"ha_key,omitempty"`
+	MgmtKey string `json:"mgmt_key,omitempty"`
 }
 
 var virtualIf = regexp.MustCompile(`^(lo|pflog|pfsync|enc|bridge|vlan|lagg|gif|gre|tun|tap|vxlan|wg|ovpn|epair|ue|ipsec)[0-9]*$`)
@@ -41,6 +45,8 @@ func collectInfo() Info {
 		Version:  run("opnsense-version"),
 		Kernel:   run("uname", "-r"),
 		Arch:     run("uname", "-m"),
+		HAKey:    settingKey(configPath(), "ha_interface"),
+		MgmtKey:  settingKey(configPath(), "mgmt_interface"),
 		Packages: map[string]string{},
 	}
 	for _, name := range strings.Fields(run("ifconfig", "-l")) {
@@ -81,6 +87,12 @@ func (a Info) Compare(b Info) []string {
 	if a.Kernel != b.Kernel || a.Arch != b.Arch {
 		d = append(d, fmt.Sprintf("kernel/arch differs: %s/%s vs %s/%s", a.Kernel, a.Arch, b.Kernel, b.Arch))
 	}
+	if a.HAKey != "" && b.HAKey != "" && a.HAKey != b.HAKey {
+		d = append(d, fmt.Sprintf("the HA link is not the same interface on both nodes (%s and %s): assign it to the same interface key on both", a.HAKey, b.HAKey))
+	}
+	if a.MgmtKey != "" && b.MgmtKey != "" && a.MgmtKey != b.MgmtKey {
+		d = append(d, fmt.Sprintf("the management interface is not the same on both nodes (%s and %s): assign it to the same interface key on both", a.MgmtKey, b.MgmtKey))
+	}
 	an, bn := nicNames(a), nicNames(b)
 	if an != bn {
 		d = append(d, fmt.Sprintf("NIC names differ: [%s] vs [%s]", an, bn))
@@ -107,4 +119,24 @@ func nicNames(i Info) string {
 		n = append(n, x.Name)
 	}
 	return strings.Join(n, ",")
+}
+
+var settingKeyRe = regexp.MustCompile(`^[a-z0-9_]{1,32}$`)
+
+// settingKey reads one interface key of this plugin's settings from a config file ("" if absent or not a plain key).
+func settingKey(path, name string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	sec := settingsRe.Find(b)
+	re := regexp.MustCompile(`<` + name + `>([^<]*)</` + name + `>`)
+	m := re.FindSubmatch(sec)
+	if m == nil {
+		return ""
+	}
+	if k := strings.TrimSpace(string(m[1])); settingKeyRe.MatchString(k) {
+		return k
+	}
+	return ""
 }

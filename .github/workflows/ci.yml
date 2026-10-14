@@ -23,12 +23,14 @@ jobs:
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
           staticcheck ./...
+          GOOS=freebsd GOARCH=amd64 staticcheck ./... # the files of the binary that ships (garp_freebsd.go, ...)
       - name: vulnerabilities (no dependency, so this is the standard library of the Go that builds it)
         working-directory: daemon
         run: |
           go mod verify
           go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           govulncheck ./...
+          GOOS=freebsd GOARCH=amd64 govulncheck ./... # the binary that ships
       - name: format, vet, test (with the race detector)
         working-directory: daemon
         run: |
@@ -84,7 +86,7 @@ jobs:
       - name: shell scripts
         run: |
           # every shell script of the repository, no exception list: a finding fails the build (the few intended ones carry a justified directive)
-          git ls-files '*.sh' src/etc/rc.d/hasyncd | xargs shellcheck -S warning
+          git ls-files '*.sh' src/etc/rc.d/hasyncd 'src/etc/rc.syshook.d/*' | xargs shellcheck -S warning
       - name: JavaScript syntax (widget and views)
         run: |
           node --check src/opnsense/www/js/widgets/ActiveStandby.js

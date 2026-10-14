@@ -57,13 +57,13 @@ func (d *Daemon) serveCtl() error {
 	mux.HandleFunc("/pair", d.ctlPair)
 	mux.HandleFunc("/promote", d.ctlPromote)
 	mux.HandleFunc("/unlock", func(w http.ResponseWriter, r *http.Request) {
-		d.unlockedUntil.Set(time.Now().Add(30 * time.Minute))
+		d.setUnlocked(time.Now().Add(30 * time.Minute))
 		unlockConfig()
 		d.event("warning", "standby config unlocked for 30 minutes by the operator (e.g. for an update)")
 		writeJSON(w, 200, map[string]string{"status": "ok", "message": "config.xml unlocked for 30 minutes"})
 	})
 	mux.HandleFunc("/lock", func(w http.ResponseWriter, r *http.Request) {
-		d.unlockedUntil.Set(time.Time{})
+		d.setUnlocked(time.Time{})
 		d.ensureConfigLock()
 		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})

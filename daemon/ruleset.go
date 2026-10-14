@@ -80,9 +80,21 @@ func (d *Daemon) rulesetHB(st State) string {
 
 // filterReloadLocal reloads the packet filter from this node's own configuration. That replaces a mirrored ruleset, so the
 // mirror is declared gone and the active node sends it again.
+// filterReloadLocal loads the ruleset of this node and checks it like the promotion does (reloadFilter): configctl does not always
+// report a failed action in its exit status, so the output and the state of pf are read too. A configuration apply that leaves pf
+// without its ruleset is then rolled back instead of acknowledged.
 func (d *Daemon) filterReloadLocal() (string, error) {
 	d.rs.set("")
-	return sh("configctl", "filter", "reload")
+	out, err := sh("configctl", "filter", "reload")
+	if err == nil && configctlFailed(out) {
+		err = fmt.Errorf("filter reload failed: %s", out)
+	}
+	if err == nil {
+		if info, e := sh("pfctl", "-si"); e != nil || !pfEnabled(info) {
+			err = errors.New("pf is not enabled after the filter reload")
+		}
+	}
+	return out, err
 }
 
 func (d *Daemon) rulesetLoop() {

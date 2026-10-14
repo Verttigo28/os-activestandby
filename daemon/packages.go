@@ -40,7 +40,11 @@ func decodePackages(s string) (map[string]string, error) {
 
 // ensurePackages makes the standby's package set cover the active node's.
 func (d *Daemon) ensurePackages(want map[string]string) error {
-	d.pkgMu.Lock() // one install at a time, whatever the peer sends
+	// one install at a time, whatever the peer sends; a second one is refused at once instead of waiting (an installation that does not
+	// end would otherwise hold every later configuration push for ever: the push is retried by the active node)
+	if !d.pkgMu.TryLock() {
+		return errors.New("a plugin installation is already running")
+	}
 	defer d.pkgMu.Unlock()
 	if len(want) == 0 {
 		return nil
@@ -74,14 +78,22 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 	proxy := "http://" + net.JoinHostPort(st.PeerAddr, fmt.Sprint(proxyPort(d.cfg)))
 	d.event("info", "installing %d plugin(s) replicated from the active node: %s", len(install), strings.Join(install, ", "))
 	// The installation can take minutes. A promotion of this node must not run next to it (a plugin's install scripts restart
-	// configd and reconfigure plugins, which collides with the takeover): stopPackageInstall cancels it, and the whole process group
+	// configd and reconfigure plugins, which collides with the takeover): blockPackageInstall cancels it, and the whole process group
 	// of pkg goes (ownGroup).
-	if d.store.Get().State != StateStandby {
-		return errors.New("not installing plugins: this node is no longer standby")
-	}
+	// The role check and the registration of the installation happen under the same lock that a promotion takes to block the
+	// installations (blockPackageInstall): either the promotion finds this installation and stops it, or this installation finds
+	// the promotion and does not start. There is no window between the two.
 	ctx, cancel := context.WithTimeout(context.Background(), pkgInstallTimeout)
 	done := make(chan struct{})
 	d.pkgr.mu.Lock()
+	if d.pkgr.blocked || d.store.Get().State != StateStandby {
+		d.pkgr.mu.Unlock()
+		cancel()
+		return errors.New("not installing plugins: this node is taking over or no longer standby")
+	}
+	if pkgAfterRoleCheck != nil {
+		pkgAfterRoleCheck() // the tests stop here (lock held) to start a promotion at this very point
+	}
 	d.pkgr.cancel, d.pkgr.done = cancel, done
 	d.pkgr.mu.Unlock()
 	defer func() {
@@ -173,6 +185,9 @@ func (d *Daemon) packageReport() string {
 	return s
 }
 
+// pkgAfterRoleCheck is called between the check of the role and the start of the installation (nil except in the tests).
+var pkgAfterRoleCheck func()
+
 // pkgInstallTimeout bounds one installation of replicated plugins.
 var pkgInstallTimeout = 8 * time.Minute
 
@@ -185,17 +200,20 @@ var pkgInstall = func(ctx context.Context, env, names []string) ([]byte, error) 
 	return cmd.CombinedOutput()
 }
 
-// pkgRun is the plugin installation in progress, if any.
+// pkgRun is the plugin installation in progress, if any, and whether a promotion forbids new ones.
 type pkgRun struct {
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	done   chan struct{}
+	mu      sync.Mutex
+	blocked bool // a promotion runs: no installation may start
+	cancel  context.CancelFunc
+	done    chan struct{}
 }
 
-// stopPackageInstall cancels a plugin installation in progress and waits (bounded) until it is over. Called at the start of a
-// promotion.
-func (d *Daemon) stopPackageInstall() {
+// blockPackageInstall is called at the start of a promotion: no plugin installation may start until unblockPackageInstall, and one
+// in progress is cancelled (its whole process group is killed) and waited for, at most 15 s. After that the promotion goes on: the
+// group has been sent SIGKILL, and what still runs then cannot be stopped from here (it is reported).
+func (d *Daemon) blockPackageInstall() {
 	d.pkgr.mu.Lock()
+	d.pkgr.blocked = true
 	cancel, done := d.pkgr.cancel, d.pkgr.done
 	d.pkgr.mu.Unlock()
 	if cancel == nil {
@@ -205,7 +223,16 @@ func (d *Daemon) stopPackageInstall() {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(15 * time.Second):
-		d.event("error", "the plugin installation did not stop within 15 s: the takeover goes on")
+	case <-time.After(pkgStopWait):
+		d.event("error", "the plugin installation did not end %s after it was killed: the takeover goes on", pkgStopWait)
 	}
 }
+
+// unblockPackageInstall ends the block of a promotion (when it is over, whatever its result).
+func (d *Daemon) unblockPackageInstall() {
+	d.pkgr.mu.Lock()
+	d.pkgr.blocked = false
+	d.pkgr.mu.Unlock()
+}
+
+var pkgStopWait = 15 * time.Second
