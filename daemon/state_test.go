@@ -45,7 +45,7 @@ func TestEmptyStateWithoutLeftoversStillFailsSafe(t *testing.T) {
 }
 
 func TestBackupCopyRescuesTornState(t *testing.T) {
-	good := `{"role":"master","state":"active","peer_fp":"abc","epoch":7}`
+	good := `{"role":"master","state":"active","peer_fp":"abc","peer_addr":"10.0.0.2","peer_port":7690,"epoch":7}`
 	st := storeIn(t, map[string]string{"state.json": "", "state.json.bak": good}).Get()
 	if st.Role != RoleMaster || st.PeerFP != "abc" || st.Epoch != 7 || st.Corrupt {
 		t.Fatalf("backup not used: %+v", st)

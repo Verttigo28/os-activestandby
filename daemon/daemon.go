@@ -18,7 +18,7 @@ import (
 )
 
 // version is set at build time (-ldflags "-X main.version=...") by CI and build/build.ps1.
-var version = "1.0.6"
+var version = "1.0.7"
 
 type Config struct {
 	ListenPort   int    `json:"listen_port"`
@@ -198,6 +198,7 @@ func runDaemon() error {
 	cfg, cfgProblem := loadConfigChecked()
 	d := &Daemon{cfg: cfg, cfgProblem: cfgProblem, store: st, cert: cert, fp: fingerprint(cert.Certificate[0]), pairing: &Pairing{}, ops: &Ops{}, hb: newHeartbeat(), auto: &autoState{}, sync: &syncCtl{wake: make(chan struct{}, 1)}, sess: newSessionSync()}
 	setDetection(d.cfg.DetectTime)
+	d.tx.attach(filepath.Join(st.dir, "transactions.json"))
 	d.health, d.drift, d.leases, d.upd = newHealthState(), &driftState{}, &leaseState{}, &updateRun{}
 	d.hb.inc = nextIncarnation(st.dir) // increasing across restarts, whatever the clock does
 	d.ev = openEvents(st.dir)

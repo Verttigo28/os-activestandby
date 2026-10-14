@@ -11,7 +11,7 @@ import (
 func TestAStandbyStopsTheLLDPAgent(t *testing.T) {
 	found := false
 	for _, c := range haStop {
-		if strings.Join(c, " ") == "service lldpd onestop" {
+		if strings.Join(c, " ") == "pkill -9 -x lldpd" {
 			found = true
 		}
 	}

@@ -156,7 +156,7 @@ func TestDurableWriteFailsCleanly(t *testing.T) {
 // ---- what a restart reads after a crash at each step ----
 
 func TestCrashLeftoversAreIgnoredAtStart(t *testing.T) {
-	good := `{"role":"master","state":"standby","peer_fp":"abc","epoch":4}`
+	good := `{"role":"master","state":"standby","peer_fp":"abc","peer_addr":"10.0.0.2","peer_port":7690,"epoch":4}`
 	// crash after the temporary file was written, before the rename: the old state.json stands, the .tmp is ignored
 	st := storeIn(t, map[string]string{"state.json": good, "state.json.tmp": `{"role":"master","state":"active","epoch":5}`}).Get()
 	if st.State != StateStandby || st.Epoch != 4 || st.Corrupt {
@@ -165,7 +165,7 @@ func TestCrashLeftoversAreIgnoredAtStart(t *testing.T) {
 }
 
 func TestMainFileCorruptBackupValid(t *testing.T) {
-	bak := `{"role":"standby","state":"standby","peer_fp":"abc","epoch":9}`
+	bak := `{"role":"standby","state":"standby","peer_fp":"abc","peer_addr":"10.0.0.2","peer_port":7690,"epoch":9}`
 	for name, main := range map[string]string{"empty": "", "torn": `{"role":"master","stat`, "empty object": "{}", "null": "null", "unknown role": `{"role":"x"}`, "unknown state": `{"role":"master","state":"promoting"}`} {
 		t.Run(name, func(t *testing.T) {
 			st := storeIn(t, map[string]string{"state.json": main, "state.json.bak": bak}).Get()
@@ -188,8 +188,8 @@ func TestBothFilesCorruptFailSafe(t *testing.T) {
 // the main file is committed, the backup is older (crash between the two writes): the main file wins
 func TestStaleBackupDoesNotOverrideTheMainFile(t *testing.T) {
 	st := storeIn(t, map[string]string{
-		"state.json":     `{"role":"master","state":"standby","peer_fp":"abc","epoch":8}`,
-		"state.json.bak": `{"role":"master","state":"active","peer_fp":"abc","epoch":7}`,
+		"state.json":     `{"role":"master","state":"standby","peer_fp":"abc","peer_addr":"10.0.0.2","peer_port":7690,"epoch":8}`,
+		"state.json.bak": `{"role":"master","state":"active","peer_fp":"abc","peer_addr":"10.0.0.2","peer_port":7690,"epoch":7}`,
 	}).Get()
 	if st.State != StateStandby || st.Epoch != 8 {
 		t.Fatalf("%+v", st)

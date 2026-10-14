@@ -3,8 +3,11 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"sync"
@@ -63,6 +66,7 @@ type txLog struct {
 	mu    sync.Mutex
 	m     map[string]string
 	order []string
+	path  string // where it is saved (empty: memory only)
 }
 
 func newTID() string {
@@ -85,6 +89,7 @@ func (t *txLog) set(tid, status string) {
 		}
 	}
 	t.m[tid] = status
+	t.persist()
 }
 
 // begin registers the execution of tid. "" means: go ahead. Otherwise the existing status is returned and nothing may run.
@@ -339,3 +344,40 @@ func setRequestValidity(ttl, skew time.Duration) (restore func()) {
 }
 
 func validFor() time.Duration { ttl, skew := requestValidity(); return ttl + skew }
+
+// attach makes the log durable: it is read from path now, and written there at every change. A node whose daemon restarts keeps knowing
+// which transitions it refused or ran, so a late copy of a request (or a retry) cannot execute on the new process.
+func (t *txLog) attach(path string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	defer func() { t.path = path }() // set after the loading: reading must not rewrite the file once per entry
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var saved struct {
+		Order []string          `json:"order"`
+		M     map[string]string `json:"m"`
+	}
+	if json.Unmarshal(b, &saved) != nil {
+		log.Printf("the transition log %s is damaged: starting with an empty one", path)
+		return
+	}
+	for _, tid := range saved.Order {
+		if s, ok := saved.M[tid]; ok && tidRe.MatchString(tid) && (s == txStarted || s == txDone || s == txFailed || s == txAborted) {
+			// a transition that was running when the daemon stopped did not finish: the recovery of the role change handles it
+			t.set(tid, s)
+		}
+	}
+}
+
+// persist writes the log (caller holds t.mu). A failure is logged: the write-ahead record of the role change is the primary protection.
+func (t *txLog) persist() {
+	if t.path == "" {
+		return
+	}
+	b, _ := json.Marshal(map[string]any{"order": t.order, "m": t.m})
+	if err := writeFileDurable(t.path, b, 0o600); err != nil {
+		log.Printf("the transition log could not be saved: %v", err)
+	}
+}

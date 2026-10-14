@@ -256,3 +256,16 @@ Inputs: an independent audit of 09281e5 with a field error (a failing plugin ins
 | 7 | The failback gave the role back before the plugin step, and the node that gave it back no longer drives the job | design review of the new phase | fixed: the plugin step comes first, failback last |
 
 Hardware and simulation are kept apart: the job state machine (reboot by the update, failed update, pending after verification, plugin step, failback order) and the parsing of the progress file are **simulated** (`upgrade_job_test.go`, `upgrade_status_test.go`); the plugin package exchange between two real nodes and the daemon restart of an active node are **verified on the two-node lab** (see docs/validation.md).
+
+## Thirteenth round (1.0.7): a review of 1.0.6
+
+Six points were sent; each was checked in the code before anything was changed.
+
+| # | Point | Checked | Result |
+|---|-------|---------|--------|
+| 1 | `txLog` is memory only, 64 entries | true. An abort followed by a restart and the late request: executed on the new process (test written first, it failed) | fixed: the log is saved and read at start. The interrupted transitions themselves were already covered by the write-ahead record (`transition.json`) and its tests |
+| 2 | `hbDead`, `hbInterval` without synchronisation | written once before the goroutines exist | no change in behaviour, documented |
+| 3 | `time.Tick(hbInterval)` does not follow a change | true, but the setting is applied by restarting the service (Apply stops and starts it) | documented |
+| 4 | `store.Update` results ignored in heartbeat.go | three informational fields; the failure is logged and retried at the next heartbeat | no change |
+| 5 | State validation does not check coherence | true (tests: standalone but active, paired without address, port 0 or too large, paired without state, all accepted before) | fixed |
+| 6 | Ruleset: coherence between applied and expected | the mirror has tests for refusal, rollback, busy; what pf actually runs against the file was not compared | open, not reproduced as a defect |

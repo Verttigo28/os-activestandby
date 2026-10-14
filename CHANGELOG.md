@@ -2,6 +2,15 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 1.0.7
+An independent review of 1.0.6 (six points, each checked in the code first; see [audit](docs/audit.md#thirteenth-round-107-a-review-of-106)).
+### Fixed
+- **lldpd sent frames with the shared MAC when a node stood down** (found on the lab while checking 1.0.6): stopping lldpd makes it send a goodbye LLDP frame on every device, and at a demotion the devices were already silenced, so the frames left from the shared MAC (captured with tcpdump, and the hot standby detector shut vlan0.5 down for it). lldpd is now killed (no goodbye frame) before the devices are touched, and by the standby enforcer. Verified on the lab: a capture during a demotion shows no frame from the shared MAC after it, and no leak event.
+- **A cancelled transition was forgotten when the daemon restarted**: the log of the transitions this node ran or refused (replay protection of `/v1/promote`, memory for `/v1/abort`) was in memory only. A late copy of a request that the requester had cancelled could run on the new process, while the requester had taken its role back. The log is now saved on every change and read at start (a damaged file is ignored). Reproduced by a test before the change.
+- **A state file that no version writes was believed** (valid JSON, known role and state, but a standalone node that is "active", a paired node without a usable address or port or without state): the state is now checked for coherence when it is loaded and before it is saved; a node that reads such a file starts as a silent standby, like for any unreadable state. Two of our own test fixtures were incoherent and were corrected.
+### Reviewed, no change needed
+- `hbDead` and `hbInterval` are written once at the start of the daemon, before any goroutine that reads them exists, and the settings are applied by restarting the service (the Apply button): no race in the running daemon; this is now written down at `setDetection`. The `store.Update` calls of the heartbeat code that ignore their result save informational fields (the management address of the peer, the acknowledged hash, the sync error); a failed write is logged (`STATE NOT SAVED`) and the next heartbeat tries again. The ruleset mirror has tests for the refusals, the rollback and the busy case; the comparison of what pf runs with the file was not tested on hardware and stays an open point.
+
 ## 1.0.6
 Found on the lab pair right after the 1.0.5 upgrade run (a warning in the GUI, then a capture on the standby).
 ### Fixed

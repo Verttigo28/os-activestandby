@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -146,6 +148,21 @@ func (s State) validate() error {
 	case "", StateActive, StateStandby:
 	default:
 		return fmt.Errorf("unknown state %q", s.State)
+	}
+	// coherence: combinations that no version of this software writes (an edited or damaged file)
+	if s.Role == RoleStandalone && s.State != "" {
+		return fmt.Errorf("a standalone node cannot be %s", s.State)
+	}
+	if s.PeerFP != "" {
+		if ip := net.ParseIP(s.PeerAddr); ip == nil {
+			return fmt.Errorf("paired with a peer whose address %q is not an IP address", s.PeerAddr)
+		}
+		if s.PeerPort < 1 || s.PeerPort > 65535 {
+			return fmt.Errorf("paired with a peer whose port is %d", s.PeerPort)
+		}
+		if s.State == "" {
+			return errors.New("paired but neither active nor standby")
+		}
 	}
 	return nil
 }

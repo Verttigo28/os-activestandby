@@ -24,6 +24,9 @@ var (
 	hbDead     = 3 * time.Second
 )
 
+// setDetection is called once, by the start of the daemon, before any goroutine that reads these values exists; a change of the setting
+// is applied by restarting the daemon (the Apply button of the settings stops and starts the service). They are not meant to change while
+// the daemon runs: the loops take hbInterval once.
 func setDetection(sec int) {
 	if sec < 1 || sec > 30 {
 		sec = 3
