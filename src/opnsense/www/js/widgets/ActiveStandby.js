@@ -85,7 +85,7 @@ export default class ActiveStandby extends BaseTableWidget {
             rows.push(['held', t.held, `<span style="color:#c00">${this.esc(s.auto_blocked)}</span>`]);
         }
         if (this.lastEvent) {
-            rows.push(['last', t.lastevent, `<small>${this.esc(this.lastEvent.time.replace('T', ' ').replace('Z', ''))}<br>${this.esc(this.lastEvent.msg)}</small>`]);
+            rows.push(['last', t.lastevent, `<small>${this.esc(this.lastEvent.local || this.lastEvent.time.replace('T', ' ').replace('Z', ' UTC'))}<br>${this.esc(this.lastEvent.msg)}</small>`]);
         }
         // stable row ids: a row that is no longer true (maintenance over, problem gone) is removed instead of lingering
         const keep = new Set(rows.map(r => r[0]));

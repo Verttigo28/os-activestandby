@@ -68,7 +68,7 @@ func (d *Daemon) serveCtl() error {
 		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"events": d.ev.Recent(50)})
+		writeJSON(w, 200, map[string]any{"events": d.ev.Recent(50), "tz": serverZone()})
 	})
 	mux.HandleFunc("/sync-now", func(w http.ResponseWriter, r *http.Request) {
 		d.wakeSync()
@@ -104,7 +104,7 @@ func (d *Daemon) ctlStatus(w http.ResponseWriter, r *http.Request) {
 		"local_fp": d.fp, "ha_address": d.haAddr, "listen_port": d.cfg.ListenPort,
 		"pairing_open": active, "state": st.State, "state_lost": st.Corrupt, "proxy_port": proxyPort(d.cfg), "auto_failover": d.cfg.autoOn(), "auto_blocked": d.auto.Blocked(),
 		"mgmt_address": d.mgmtAddr(), "peer_mgmt": st.PeerMgmt,
-		"os_version": d.localVer, "maintenance": d.maintenanceOn(), "maintenance_until": st.MaintenanceUntil,
+		"os_version": d.localVer, "maintenance": d.maintenanceOn(), "maintenance_until": st.MaintenanceUntil, "maintenance_until_local": localStamp(st.MaintenanceUntil), "tz": serverZone(),
 		"health": d.healthReason(), "degraded": d.degradedReason(), "pfsync_problem": d.pfsyncStatus(), "package_diff": d.packageReport(), "warm": d.warmInfo(), "ruleset_mirror": d.rulesetStatus(), "failover_in_progress": d.failing.Load(), "drift": d.driftReason(), "fencing": d.cfg.FenceCommand != "", "preempt": d.cfg.Preempt,
 	}
 	if rec, err := readIntent(d.store.dir); rec != nil || err != nil {

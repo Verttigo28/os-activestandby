@@ -19,7 +19,7 @@ func (d *Daemon) registerCtl2(mux *http.ServeMux) {
 		writeJSON(w, 200, map[string]any{"status": "ok", "maintenance": d.maintenanceOn()})
 	})
 	mux.HandleFunc("/history", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"history": d.hist.Recent(50)})
+		writeJSON(w, 200, map[string]any{"history": d.hist.Recent(50), "tz": serverZone()})
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")

@@ -217,7 +217,7 @@
         function refreshEvents() {
             ajaxGet('/api/activestandby/pairing/events', {}, function (r) {
                 const col = {error: 'as-ev-error', warning: 'as-ev-warning', change: 'as-ev-change', info: 'as-ev-info'};
-                var evh = (r.events || []).map(e => '<tr class="' + (col[e.kind] || 'as-ev-info') + '"><td class="as-ev-time">' + esc(e.time.replace('T', ' ').replace('Z', '')) + '</td><td>' + esc(e.msg) + '</td></tr>').join(''); $('#evTable tbody, #evTable2 tbody').html(evh);
+                var evh = (r.events || []).map(e => '<tr class="' + (col[e.kind] || 'as-ev-info') + '"><td class="as-ev-time">' + esc(e.local || e.time.replace('T', ' ').replace('Z', ' UTC')) + '</td><td>' + esc(e.msg) + '</td></tr>').join(''); $('#evTable tbody, #evTable2 tbody').html(evh); if (r.tz) { $('.as-time-h').text('{{ lang._('Time') }} (' + r.tz + ')'); }
             });
         }
         refreshEvents();
@@ -326,7 +326,7 @@
         </div>
         <p style="margin-top:30px"><a href="#" id="toggleSbEvents">{{ lang._('Show recent events') }}</a></p>
         <div id="sbEvents" style="display:none; text-align:left; max-width:900px; margin:0 auto">
-            <table class="table table-condensed as-events" id="evTable2"><thead><tr><th>{{ lang._('Time (UTC)') }}</th><th>{{ lang._('Event') }}</th></tr></thead><tbody></tbody></table>
+            <table class="table table-condensed as-events" id="evTable2"><thead><tr><th class="as-time-h">{{ lang._('Time (firewall time zone)') }}</th><th>{{ lang._('Event') }}</th></tr></thead><tbody></tbody></table>
         </div>
     </div>
 </div>
@@ -349,7 +349,7 @@
             <div id="actResult" class="alert" style="display:none"></div>
             <div id="breakResult" class="alert" style="display:none"></div>
             <h3>{{ lang._('Recent events') }}</h3>
-            <table class="table table-condensed as-events" id="evTable" style="max-width:900px"><thead><tr><th>{{ lang._('Time (UTC)') }}</th><th>{{ lang._('Event') }}</th></tr></thead><tbody></tbody></table>
+            <table class="table table-condensed as-events" id="evTable" style="max-width:900px"><thead><tr><th class="as-time-h">{{ lang._('Time (firewall time zone)') }}</th><th>{{ lang._('Event') }}</th></tr></thead><tbody></tbody></table>
             <button class="btn btn-danger" id="btnBreak" style="display:none">{{ lang._('Break pair') }}</button>
         </div>
         <div class="col-md-12" id="pairHint" style="display:none"><hr/><p>{{ lang._('This firewall is not part of a pair yet. Use the Setup wizard tab.') }} <a href="#" id="toWizard">{{ lang._('Open the Setup wizard') }}</a></p></div>

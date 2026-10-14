@@ -21,6 +21,7 @@ type HistoryEntry struct {
 	Epoch      uint64  `json:"epoch"`
 	Phases     []Phase `json:"phases,omitempty"`    // promote: where the time went
 	DetectMs   int64   `json:"detect_ms,omitempty"` // automatic promote: how long the peer had been silent
+	Local      string  `json:"local,omitempty"`     // Time in the time zone of this server, filled when read, never stored
 }
 
 type History struct {
@@ -62,7 +63,9 @@ func (h *History) Recent(n int) []HistoryEntry {
 	defer h.mu.Unlock()
 	out := make([]HistoryEntry, 0, n)
 	for i := len(h.list) - 1; i >= 0 && len(out) < n; i-- {
-		out = append(out, h.list[i])
+		ent := h.list[i]
+		ent.Local = localStamp(ent.Time)
+		out = append(out, ent)
 	}
 	return out
 }

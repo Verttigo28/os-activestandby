@@ -39,7 +39,7 @@
         <hr/>
         <h2>{{ lang._('Failover history') }}</h2>
         <table class="table table-condensed table-striped" id="opHist" style="max-width:900px">
-            <thead><tr><th>{{ lang._('Time (UTC)') }}</th><th>{{ lang._('Change') }}</th><th>{{ lang._('Duration') }}</th><th>{{ lang._('Reason') }}</th></tr></thead><tbody></tbody>
+            <thead><tr><th class="as-time-h">{{ lang._('Time (firewall time zone)') }}</th><th>{{ lang._('Change') }}</th><th>{{ lang._('Duration') }}</th><th>{{ lang._('Reason') }}</th></tr></thead><tbody></tbody>
         </table>
 
         <hr/>
@@ -66,7 +66,7 @@ $(function () {
     function refreshMaint() {
         ajaxGet('/api/activestandby/pairing/status', {}, function (s) {
             const on = !!s.maintenance;
-            $('#opMaint').attr('class', 'label label-' + (on ? 'warning' : 'default')).text(on ? '{{ lang._('ON until') }} ' + (s.maintenance_until || '').replace('T', ' ').replace('Z', ' UTC') : '{{ lang._('off') }}');
+            $('#opMaint').attr('class', 'label label-' + (on ? 'warning' : 'default')).text(on ? '{{ lang._('ON until') }} ' + (s.maintenance_until_local || (s.maintenance_until || '').replace('T', ' ').replace('Z', ' UTC')) : '{{ lang._('off') }}');
         });
     }
     function maintAnswer(r) {
@@ -106,8 +106,8 @@ $(function () {
     function refreshHistory() {
         ajaxGet('/api/activestandby/pairing/history', {}, function (r) {
             $('#opHist tbody').html((r.history && r.history.length ? r.history : [{time: '', empty: true}]).map(h =>
-                h.empty ? '<tr><td colspan="4" class="text-muted">{{ lang._('No role changes recorded yet.') }}</td></tr>' : '<tr><td>' + esc(h.time.replace('T', ' ').replace('Z', '')) + '</td><td>' + (h.type === 'promote' ? '{{ lang._('became ACTIVE') }}' : '{{ lang._('became STANDBY') }}') +
-                '</td><td>' + (h.duration_ms / 1000).toFixed(1) + ' s</td><td>' + esc(h.reason) + '</td></tr>').join(''));
+                h.empty ? '<tr><td colspan="4" class="text-muted">{{ lang._('No role changes recorded yet.') }}</td></tr>' : '<tr><td>' + esc(h.local || h.time.replace('T', ' ').replace('Z', ' UTC')) + '</td><td>' + (h.type === 'promote' ? '{{ lang._('became ACTIVE') }}' : '{{ lang._('became STANDBY') }}') +
+                '</td><td>' + (h.duration_ms / 1000).toFixed(1) + ' s</td><td>' + esc(h.reason) + '</td></tr>').join('')); if (r.tz) { $('.as-time-h').text('{{ lang._('Time') }} (' + r.tz + ')'); }
         });
     }
 

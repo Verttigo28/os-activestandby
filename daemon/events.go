@@ -21,6 +21,8 @@ type Event struct {
 	Time string `json:"time"`
 	Kind string `json:"kind"` // info | change | warning | error
 	Msg  string `json:"msg"`
+	// Local is Time in the time zone of this server, filled when the events are read (localtime.go), never stored
+	Local string `json:"local,omitempty"`
 }
 
 type Events struct {
@@ -87,7 +89,9 @@ func (e *Events) Recent(n int) []Event {
 	defer e.mu.Unlock()
 	out := make([]Event, 0, n)
 	for i := len(e.list) - 1; i >= 0 && len(out) < n; i-- {
-		out = append(out, e.list[i])
+		ev := e.list[i]
+		ev.Local = localStamp(ev.Time)
+		out = append(out, ev)
 	}
 	return out
 }
