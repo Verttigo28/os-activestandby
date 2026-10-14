@@ -40,10 +40,15 @@ if ($mx->query('/opnsense/interfaces')->length === 0 || $mx->query('/opnsense/sy
 }
 
 $paths = ['/opnsense/system/hostname'];
-foreach (['ha_interface', 'mgmt_interface'] as $f) {
-    $k = trim($lx->evaluate("string(/opnsense/OPNsense/ActiveStandby/general/$f)"));
-    if ($k !== '' && preg_match('/^[a-z0-9_]+$/i', $k)) {
-        $paths[] = "/opnsense/interfaces/$k";
+// The HA and management interfaces are node-local: those of THIS node are kept as they are here, and those of the ACTIVE node are
+// never imported, even when the two nodes use different interface keys. Otherwise the active's HA (or management) interface would
+// arrive here as a data interface and its address would come up on this node at a takeover, next to the peer that still has it.
+foreach ([$lx, $mx] as $x) {
+    foreach (['ha_interface', 'mgmt_interface'] as $f) {
+        $k = trim($x->evaluate("string(/opnsense/OPNsense/ActiveStandby/general/$f)"));
+        if ($k !== '' && preg_match('/^[a-z0-9_]+$/i', $k) && !in_array("/opnsense/interfaces/$k", $paths, true)) {
+            $paths[] = "/opnsense/interfaces/$k";
+        }
     }
 }
 

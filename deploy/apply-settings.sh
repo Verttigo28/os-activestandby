@@ -33,10 +33,18 @@ FENCE_COMMAND="${FENCE_COMMAND:-}"
 
 API="https://$HOST/api/activestandby"
 creds() { printf 'user = "%s:%s"\n' "${API_KEY:?set API_KEY}" "${API_SECRET:?set API_SECRET}"; }
-get() { creds | curl -sk -K - "$API$1"; }
+# TLS: the certificate is checked, except for the firewall itself (HOST=127.0.0.1, its own self-signed certificate). For a remote
+# firewall give its CA with CACERT=/path/ca.pem, or accept an unchecked connection explicitly with INSECURE=1.
+case "$HOST" in
+127.0.0.1 | localhost | ::1) TLS="-k" ;;
+*) if [ -n "${CACERT:-}" ]; then TLS="--cacert $CACERT"; elif [ "${INSECURE:-0}" = 1 ]; then TLS="-k"; else echo "remote HOST: set CACERT=/path/to/ca.pem (or INSECURE=1)" >&2; exit 1; fi ;;
+esac
+# shellcheck disable=SC2086 # TLS holds one or two arguments
+get() { creds | curl -s $TLS -K - "$API$1"; }
 post() { # path, then curl arguments (the data)
 	p=$1; shift
-	creds | curl -sk -K - -X POST "$@" "$API$p"
+	# shellcheck disable=SC2086 # TLS holds one or two arguments
+	creds | curl -s $TLS -K - -X POST "$@" "$API$p"
 }
 
 if [ "$1" = "show" ]; then

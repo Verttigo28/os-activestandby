@@ -85,7 +85,7 @@
 <script>
 $(function () {
     let ifs = [];
-    const esc = s => $('<div>').text(s === undefined || s === null ? '' : s).html();
+    const esc = s => $('<div>').text(s === undefined || s === null ? '' : s).html().replace(/"/g, '&quot;').replace(/'/g, '&#39;'); // text and quoted attributes
     const step = id => { $('.wz-step').hide(); $('#' + id).show(); };
     const alertBox = (sel, cls, html) => $(sel).attr('class', 'alert ' + cls).html(html).show();
 
@@ -145,13 +145,28 @@ $(function () {
                     // only what the HA link needs, from the HA segment to this firewall: the peer API and update proxy (TCP 7690-7691),
                     // ping, and pfsync. Not "any": the GUI, SSH and DNS stay closed on this interface.
                     const base = {enabled: '1', action: 'pass', interface: ha, direction: 'in', ipprotocol: 'inet', source_net: ha, destination_net: '(self)'};
-                    ajaxCall('/api/firewall/filter/addRule', {rule: Object.assign({}, base, {protocol: 'TCP', destination_port: '7690-7691', description: 'ActiveStandby: peer API and update proxy'})}, function () {
-                        ajaxCall('/api/firewall/filter/addRule', {rule: Object.assign({}, base, {protocol: 'ICMP', description: 'ActiveStandby: ping on the HA link'})}, function () {
-                            ajaxCall('/api/firewall/filter/addRule', {rule: Object.assign({}, base, {protocol: 'pfsync', description: 'ActiveStandby: pfsync'})}, function () {
-                                ajaxCall('/api/firewall/filter/apply', {}, finish);
-                            });
+                    // each answer is checked: a rule the firewall refused (pfsync above all: without it no state is replicated and every
+                    // connection drops at a failover) must be reported, not skipped silently
+                    const rules = [
+                        {protocol: 'TCP', destination_port: '7690-7691', description: 'ActiveStandby: peer API and update proxy'},
+                        {protocol: 'ICMP', description: 'ActiveStandby: ping on the HA link'},
+                        {protocol: 'PFSYNC', description: 'ActiveStandby: pfsync'}
+                    ];
+                    const failed = [];
+                    const next = function (i) {
+                        if (i >= rules.length) {
+                            const apply = function () { ajaxCall('/api/firewall/filter/apply', {}, finish); };
+                            if (failed.length) { // the next step hides this panel: the operator must acknowledge it
+                                stdDialogInform('{{ lang._('Firewall rules') }}', esc('{{ lang._('These firewall rules could not be created, add them by hand:') }} ' + failed.join('; ')), '{{ lang._('OK') }}', apply, 'warning');
+                            } else { apply(); }
+                            return;
+                        }
+                        ajaxCall('/api/firewall/filter/addRule', {rule: Object.assign({}, base, rules[i])}, function (r) {
+                            if (!r || r.result !== 'saved') { failed.push(rules[i].description + ' (' + JSON.stringify((r && r.validations) || r) + ')'); }
+                            next(i + 1);
                         });
-                    });
+                    };
+                    next(0);
                 } else { finish(); }
             });
         });

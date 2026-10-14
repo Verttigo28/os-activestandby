@@ -11,7 +11,8 @@
         window.asReloadSettings();
         $('#frm_general').on('change input', function () { settingsDirty = true; });
 
-        function esc(s) { return $('<div>').text(s === undefined || s === null ? '' : s).html(); }
+        // safe in text and in quoted attributes: the quotes are escaped too
+        function esc(s) { return $('<div>').text(s === undefined || s === null ? '' : s).html().replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
         function showResult(sel, r) {
             // no usable answer (the shared address is moving during a failover, or the call failed): never a green box
@@ -114,7 +115,7 @@
                 showResult('#takeResult', r);
                 refreshStatus();
                 if (r.error && r.error.indexOf('would lose') >= 0) {
-                    stdDialogConfirm('{{ lang._('Unreplicated changes') }}', r.error + ' {{ lang._('Force the failover anyway and lose those changes?') }}', '{{ lang._('Force') }}', '{{ lang._('Cancel') }}', function () {
+                    stdDialogConfirm('{{ lang._('Unreplicated changes') }}', esc(r.error) + ' {{ lang._('Force the failover anyway and lose those changes?') }}', '{{ lang._('Force') }}', '{{ lang._('Cancel') }}', function () {
                         ajaxCall('/api/activestandby/pairing/failover', {force: '1'}, function (r2) { showResult('#takeResult', r2); refreshStatus(); });
                     });
                 }
@@ -193,7 +194,7 @@
                     ['{{ lang._('Pairing window') }}', s.pairing_open ? ('{{ lang._('open until') }} ' + s.pairing_expires) : '{{ lang._('closed') }}'],
                     ['{{ lang._('Certificate fingerprint') }}', s.local_fp ? '<code title="' + esc(s.local_fp) + '" style="word-break:break-all">' + esc(s.local_fp) + '</code>' : '-']
                 ];
-                if (s.error) { rows.push(['{{ lang._('Error') }}', esc(s.error)]); }
+                if (s.error) { rows.push(['{{ lang._('Error') }}', s.error]); } // escaped once, below
                 $('#statusTable tbody').html(rows.map(r => '<tr><td>' + r[0] + '</td><td>' + (r[0] === '{{ lang._('Certificate fingerprint') }}' ? r[1] : esc(r[1])) + '</td></tr>').join(''));
                 renderTiles(s);
                 $('#bannerLost').toggle(!!s.state_lost);
@@ -254,7 +255,7 @@
                 showResult('#actResult', r);
                 refreshStatus();
                 if (r.error && r.error.indexOf('would lose') >= 0) {
-                    stdDialogConfirm('{{ lang._('Unreplicated changes') }}', r.error + ' {{ lang._('Force the failover anyway and lose those changes?') }}', '{{ lang._('Force') }}', '{{ lang._('Cancel') }}', function () { doFailover(true); });
+                    stdDialogConfirm('{{ lang._('Unreplicated changes') }}', esc(r.error) + ' {{ lang._('Force the failover anyway and lose those changes?') }}', '{{ lang._('Force') }}', '{{ lang._('Cancel') }}', function () { doFailover(true); });
                 }
             });
         }

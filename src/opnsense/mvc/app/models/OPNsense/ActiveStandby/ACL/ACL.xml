@@ -2,6 +2,7 @@
     <page-system-activestandby>
         <name>System: Active/Standby HA (administrator: settings, setup, kit download, break pair)</name>
         <patterns>
+            <pattern>ui/activestandby</pattern>
             <pattern>ui/activestandby/*</pattern>
             <pattern>api/activestandby/*</pattern>
         </patterns>

@@ -17,7 +17,7 @@ export default class ActiveStandby extends BaseTableWidget {
     }
 
     esc(s) {
-        return $('<div>').text(s === undefined || s === null ? '' : String(s)).html();
+        return $('<div>').text(s === undefined || s === null ? '' : String(s)).html().replace(/"/g, '&quot;').replace(/'/g, '&#39;'); // text and quoted attributes
     }
 
     badge(text, color) {

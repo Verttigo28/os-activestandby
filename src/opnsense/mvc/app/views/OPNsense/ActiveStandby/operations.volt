@@ -54,7 +54,7 @@
 
 <script>
 $(function () {
-    const esc = s => $('<div>').text(s === undefined || s === null ? '' : s).html();
+    const esc = s => $('<div>').text(s === undefined || s === null ? '' : s).html().replace(/"/g, '&quot;').replace(/'/g, '&#39;'); // text and quoted attributes
     const lbl = {pass: 'success', warn: 'warning', fail: 'danger'};
     const PHASES = [
         ['r1-update', '{{ lang._('Update the standby') }}'], ['r1-reboot', '{{ lang._('Reboot the standby') }}'], ['r1-wait', '{{ lang._('Wait until the standby is back') }}'],
