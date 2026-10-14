@@ -25,7 +25,8 @@
         <p>
             <span id="opPlugThis" class="label label-default">-</span>
             <span id="opPlugPeer" class="label label-default" style="margin-left:6px">-</span>
-            <button class="btn btn-default btn-sm" id="opPlugSync" style="margin-left:8px" disabled><i class="fa fa-exchange"></i> {{ lang._('Synchronize plugin version') }}</button>
+            <button class="btn btn-warning btn-sm" id="opPlugSync" style="margin-left:8px; display:none"><i class="fa fa-exchange"></i> {{ lang._('Synchronize plugin version') }}</button>
+            <span id="opPlugNote" class="text-muted" style="margin-left:8px"></span>
         </p>
         <div id="opPlugRes" class="alert" style="display:none"></div>
 
@@ -79,7 +80,8 @@ $(function () {
         const same = a !== '' && a === b;
         $('#opPlugThis').attr('class', 'label label-' + (a ? 'info' : 'default')).text('{{ lang._('This node') }}: ' + (a || '?'));
         $('#opPlugPeer').attr('class', 'label label-' + (!b ? 'default' : (same ? 'success' : 'danger'))).text('{{ lang._('Peer') }}: ' + (b || '{{ lang._('unknown') }}'));
-        $('#opPlugSync').prop('disabled', !s.peer_alive || !b || same).attr('title', same ? '{{ lang._('Both nodes run the same version') }}' : '');
+        $('#opPlugSync').toggle(!!s.peer_alive && !!b && !same);
+        $('#opPlugNote').text(same ? '{{ lang._('Both nodes run the same version.') }}' : (!s.peer_alive || !b ? '{{ lang._('The peer version is not known (peer not reachable).') }}' : '{{ lang._('The versions differ.') }}'));
     }
     $('#opPlugSync').click(function () {
         stdDialogConfirm('{{ lang._('Synchronize plugin version') }}', '{{ lang._('The older node installs the plugin package of the newer one and restarts its HA service. Continue?') }}', '{{ lang._('Synchronize') }}', '{{ lang._('Cancel') }}', function () {

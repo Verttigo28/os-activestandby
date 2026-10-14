@@ -257,3 +257,7 @@ Run on the two nodes of the lab (`opn-test`, `opn-test2`, a VM pair), with devel
 | End state, read on both nodes | 15.1-RELEASE-p4 on both, update check of the second node re-run by the job (nothing pending), same plugin version, one active and one standby, maintenance off |
 
 Not exercised on hardware: an update that fails half way (the "Partial update failure" path is tested on its text only), a standby whose repository answers `Forbidden` during the verification, the failback option, the GUI page and its button (not opened in a browser: the controller passes `php -l` on the lab and the configd action `ctl_plugin_sync` answers there, the template was only read).
+
+### J7. A standby transmitting with the shared MAC: lldpd (1.0.6)
+
+Seen on the lab after the J6 run: the GUI said that the standby was not ready for a warm takeover (`vlan0.5 transmitted while it had to be silent`). A capture on the standby (`tcpdump -e -i lagg0 ether proto 0x88cc`) showed an LLDP frame every 30 s with **the shared MAC as source**, sent by `lldpd`. After the fix (the standby stops `lldpd`), checked on the lab: no `lldpd` process on the standby, running on the active node; after a graceful failover (2.4 s) it ran on the new active node and not on the old one, and the new standby reported `ready: true` in hot mode. Other agents that send from the MAC of their device (a DHCP client, a router advertisement daemon, mDNS) were not exercised: the hot standby detector remains the safety net for them, it reports and shuts the device down.

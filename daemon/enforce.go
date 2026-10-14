@@ -90,7 +90,7 @@ func (d *Daemon) enforceOnce() {
 // commands only, run without the operations lock.
 func standbyServicesRunning() []string {
 	var running []string
-	for _, p := range []string{"charon", "dpinger", "openvpn"} {
+	for _, p := range []string{"charon", "dpinger", "openvpn", "lldpd"} {
 		if _, err := sh("pgrep", "-x", p); err == nil {
 			running = append(running, p)
 		}

@@ -2,6 +2,12 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 1.0.6
+Found on the lab pair right after the 1.0.5 upgrade run (a warning in the GUI, then a capture on the standby).
+### Fixed
+- **A standby transmitted with the shared MAC address**: `lldpd` (the LLDP plugin) sent a frame every 30 s from the standby, with the shared MAC as source (captured with tcpdump on the standby). The hot standby detector saw it (`vlan0.5 transmitted 1 packet while it should be silent`), shut the device down and reported "the takeover will be classic". A standby now stops `lldpd` (demotion, and the periodic standby enforcer, which also catches the boot sequence starting it); it is started again with the other enabled services at a takeover. Verified on the lab: not running on the standby, running on the new active node after a failover, and the standby reports a hot takeover again.
+- GUI: the plugin synchronisation button was shown disabled as an empty grey box when both nodes run the same version; it is now shown only when the versions differ, with a sentence saying what the state is.
+
 ## 1.0.5
 An independent audit of 11372fc, then two independent reviews of the whole repository; see [audit](docs/audit.md#eleventh-round-105-the-audit-of-11372fc). Each finding was checked in the code before it was acted on; the HA findings were reproduced by a test that failed before the fix.
 ### Fixed

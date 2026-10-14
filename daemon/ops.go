@@ -34,6 +34,9 @@ var (
 		{"configctl", "openvpn", "stop"},
 		{"configctl", "wireguard", "stop"},
 		{"pkill", "-x", "dpinger"},
+		// an LLDP agent sends its frames from the MAC of the device it listens on: on a standby that is the shared MAC (seen on the lab: lldpd
+		// sent every 30 s from the standby, with the shared MAC as source). Started again with the other enabled services at a takeover.
+		{"service", "lldpd", "onestop"},
 	}
 	haStart = [][]string{
 		{"configctl", "ipsec", "start"},
