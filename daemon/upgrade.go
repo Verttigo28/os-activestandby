@@ -144,7 +144,7 @@ func (d *Daemon) jobStep() {
 				d.jobFail("could not start the update on the standby: " + err.Error())
 				return
 			}
-			d.jobLog("update of the standby started (opnsense-update, pkg upgrade)")
+			d.jobLog("update of the standby started (the firmware update of OPNsense: packages, base system, kernel)")
 			d.jobSet(j.Phase, "running")
 			return
 		}
@@ -591,10 +591,4 @@ func (d *Daemon) updateInProgress() bool {
 	d.upd.mu.Lock()
 	defer d.upd.mu.Unlock()
 	return d.upd.running
-}
-
-// readSmall reads a small file that may not exist.
-func readSmall(path string) string {
-	b, _ := os.ReadFile(path)
-	return string(b)
 }
