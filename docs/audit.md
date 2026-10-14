@@ -145,8 +145,43 @@ A second, independent audit of the tag v1.0.2 confirmed that three of the items 
 | `govulncheck` found nine standard-library vulnerabilities in the Go 1.27.0 that built every earlier release | Go 1.27.2 ([security](security.md)) |
 
 Still open, and said so:
-- **The commit of a takeover after the traffic is back** stays as it is: if the state cannot be saved the node is active, marked degraded, and boots as a silent standby after a restart. The alternative (writing an intent before touching the network and rolling it back on failure) changes what every reader of the state sees during a promotion; it needs its own design and a hardware test of a crash inside the window. Not done.
+- (done in 1.0.4, see the ninth round) **The commit of a takeover after the traffic is back** stayed as it was: if the state cannot be saved the node is active, marked degraded, and boots as a silent standby after a restart. The alternative (writing an intent before touching the network and rolling it back on failure) changes what every reader of the state sees during a promotion; it needs its own design and a hardware test of a crash inside the window. Not done.
 - **A crash of the active node on real hardware with this version** has not been measured; the unit tests and the earlier hardware runs (docs/validation.md) are not a substitute.
 - **Latency in the unit tests** (500 ms, 2 s) needs an injectable clock in the transition code. Not done.
 - **`bootStandby` and the enforcer** have no Go test of their crash behaviour (only the new fallback is reasoned about); the sandbox and the lab cover them.
 - **Concurrency**: configuration push against a promotion, and goroutine leaks, have no dedicated test.
+
+## Ninth round (1.0.4): the points left open
+
+The brief was read again against the code, starting from the list "still open" of the eighth round and from the scenarios A to J of the brief.
+
+| Point | Before | Now |
+|---|---|---|
+| Commit of a takeover after the traffic is back (B8 of the external audit) | a failed save left the node active and degraded; a restart of the daemon (not a reboot) read the old role | a **write-ahead record** of every promotion and demotion (`intent.go`): written before the first change of the machine, removed after a durable commit. At its start the daemon finds a record that is not a commit and brings the node to standby. A takeover whose commit was not saved keeps the record, so it is never taken for a definitive one ([architecture](architecture.md#commit-points-and-recovery-of-a-role-change)) |
+| Scenario A: demotion interrupted before its state is saved | after a restart of the daemon the node believed it was active with its interfaces down | standby, by the record; and a demotion that fails after the devices went down sets the role to standby at once |
+| Reordered messages (§5, §12) | the last heartbeat received, from either path, replaced the state of the peer and refreshed its liveness, even when it was older than one already received | each daemon sends an incarnation and a sequence number; an older message is counted and ignored |
+| Latency (A3) | not tested | tested on the scale of the protocol: an answer after the requester gave up, a request delivered after its validity; the network-identity invariant holds once every message in flight has arrived. Real-time sleeps, not a simulated clock: the transition code has no injectable clock |
+| Goroutine leaks (A6) | not tested | 40 failovers with 30 % loss end with the goroutines they started with |
+| Commands without timeout (§8.3) | `sh`, the PHP helpers and the shell scripts could hang for ever while holding the operations lock | bounded to 2 minutes; package installation, firmware update and fencing keep their own limits |
+| Authorization of every endpoint (§6, §25) | each route was wrapped by hand | one table of routes; a test sends another certificate, no certificate and a GET to every one of them |
+| TLS identity (§8.1) | written without fsync; a damaged one was silently replaced | durable; a replacement is logged as an error |
+
+Scenarios A to J of the brief, as the code stands now:
+
+| | Scenario | Protection | Test |
+|---|---|---|---|
+| A | demotion interrupted before its state is saved | transition record; reboot always standby | `intent_test.go` |
+| B | the takeover happened but its answer is lost | transition id, abort handshake: the old node stays standby when in doubt | `failover_test.go`, property tests |
+| C | configuration sync during a promotion | both take the operations lock; the sync checks again that the node is standby | (reasoned; no Go test, the apply runs the PHP helpers) |
+| D | disk full on the standby during a sync | the incoming file is written first, the previous files are snapshotted, a failure rolls back and is reported (also if the rollback fails) | `state_fault_test.go` for the role file; the sync path itself on the lab only |
+| E | both start at the same time without communication | boot wait, then the isolation guard; **without fencing both may promote** (documented); `fence_required` refuses it | `fencing_policy_test.go` |
+| F | standby with an address of production after a crash | enforcer every second, boot guard; the record redoes the standby view | `intent_test.go` |
+| G | the nodes cannot reach each other but both see the production network | the same as E: no proof is possible without an external arbiter; fencing | documented in this file |
+| H | different epochs and damaged state files at start | validation at load, backup copy, silent unpaired standby if both are damaged; the record | `state_fault_test.go` |
+| I | the switch keeps an old MAC entry | gratuitous ARP after the links are up; hot standby keeps the shared MAC on the port group | measured on the lab |
+| J | the plugin is updated on one node only and the protocol changed | protocol version: operations that need both sides are refused by the older node | `sync_test.go` |
+
+Still open, and said so:
+- **No injectable clock** in the transition and heartbeat code: the latency tests sleep for real (milliseconds, scaled down), and cannot reproduce a frozen clock or a clock jump.
+- **The configuration sync (apply, rollback) and the boot path** have no Go test of their own; they run the PHP helpers and act on the interfaces. The lab and the sandbox cover them.
+- **A crash of the active node and an interrupted promotion on real hardware with this version**: see [validation](validation.md) for what was run.

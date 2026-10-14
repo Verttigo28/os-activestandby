@@ -2,6 +2,23 @@
 
 All notable changes. Versions follow `vX.Y.Z` tags; the package version comes from the tag.
 
+## 1.0.4
+A third pass over the audit brief (`todo/version-1.x.md`), on the points left open in 1.0.3; see [audit](docs/audit.md#ninth-round-104-the-points-left-open).
+### Fixed
+- **A role change that the daemon did not finish is detected at its restart** (write-ahead record `transition.json`, [architecture](docs/architecture.md#commit-points-and-recovery-of-a-role-change)). Before, a daemon killed in the middle of a demotion came back believing it was active with its interfaces down, and one killed in the middle of a promotion left the full configuration in `config.xml`. Now the node goes back to standby (standby view, HA services stopped, devices down) before anything acts on its role. A takeover whose commit cannot be saved keeps the record: a restart brings it back to standby.
+- **A demotion that fails after the data interfaces went down** leaves the node standby (it could stay "active" with nothing up).
+- **Heartbeats out of order**: a heartbeat that arrives after a newer one (the other path, a late answer, a duplicate) no longer overwrites the state of the peer and no longer counts as a proof of life. Each daemon sends its incarnation with its sequence number.
+- **Every external command is bounded in time** (2 minutes): a hung `configctl` or helper no longer holds the operations lock, and with it every role change, for ever.
+- The TLS identity is written durably (a damaged one made the node silently create another and the peer refuse it); the standby view is created exclusively (no planted link followed).
+### Changed
+- **Times in the GUI are in the time zone of the firewall** (events, failover history, end of the maintenance mode, widget), with the zone in the column header, e.g. "CEST, UTC+02:00", and the offset of each date (summer/winter time). Stored times stay in UTC. A change of the zone is followed without restarting the daemon.
+- The peer API routes are declared in one table: every route requires the pinned peer certificate, every route that changes something POST.
+- Status and metrics: an unfinished transition, heartbeats out of order, the protocol, `fence_required`.
+### Tests
+- Recovery of interrupted promotions and demotions (including a record that cannot be read, a disk that refuses, a standby view that cannot be written); latency on the scale of the protocol (an answer after the requester gave up, a request after its validity) with the network-identity invariant; no goroutine left after 40 lossy failovers; heartbeat ordering; a hanging command; authorization of every peer endpoint; local times with summer and winter time.
+### Documentation
+- Commit points and recovery of a role change, error categories ([architecture](docs/architecture.md)); the frames a standby may send in each mode ([fast-ha](docs/fast-ha.md#what-a-standby-may-send-per-mode)).
+
 ## 1.0.3
 Release of the work of 1.0.2 (the tag v1.0.2 was never built: its workflow was invalid) plus the findings of a second audit; see [audit](docs/audit.md#eighth-round-103-an-external-audit-of-102).
 ### Added
