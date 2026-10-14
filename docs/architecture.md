@@ -64,6 +64,37 @@ A promotion is only reported as done when the packet filter is verified: if the 
 
 Every promotion increments an epoch. If two nodes are ever active together, the higher epoch wins (tie: primary) and the loser demotes itself as soon as two consecutive heartbeats confirm the conflict (twice the heartbeat interval: 0.75 s with the default 3 s detection time). This resolution is **not** subject to the anti-flapping hold, to maintenance mode or to the "automatic failover" switch: standing down never makes the cluster less safe. A peer that reports a transition in progress is excused for at most one minute, and a failing stand-down is retried every 2 s. Pairing, the boot sequence, the isolation guard and the optional fencing hook exist so that this stays a rare, self-healing event.
 
+## Commit points and recovery of a role change
+
+A role change is not atomic: the configuration file, the interfaces, the addresses, the MAC, the routes, the packet filter and the services change one after the other. The order and the commit point are chosen so that every intermediate state is either harmless or detected:
+
+| Step | Promotion (standby to active) | Demotion (active to standby) |
+|---|---|---|
+| 1 | checks (saved configuration valid, not already active) | the configuration in use is saved as `active.xml` |
+| 2 | **transition record written** (`transition.json`, durable) | **transition record written** |
+| 3 | full configuration in place, devices, interfaces, addresses, MAC, gratuitous ARP | data devices down (traffic stops here), then the peer may start |
+| 4 | packet filter loaded and **verified**: a failure undoes everything and the node stays standby | HA services stopped, standby view written |
+| 5 | **commit**: role active, epoch + 1, saved durably | **commit**: role standby, saved durably |
+| 6 | record removed (only if the commit is durable) | record removed (only if the commit is durable) |
+
+What a stop at each point leads to:
+- **A reboot**, at any point: a paired node always boots as standby (`boot.go`), and the record is cleared.
+- **A restart of the daemon only**, with the record present: the transition did not finish. The node goes to standby (standby view, HA services stopped, devices down) before any loop acts on its role; who serves is decided by the peer or the election. Exception: a promotion that reached its commit (active with the newer epoch) is kept and only the record is removed.
+- **A failed save at the commit of a promotion**: the node serves (its interfaces are up), is shown as degraded, and keeps the record, so a restart brings it back to standby: a takeover that is not durable is not taken for a definitive one.
+- **A failure after the devices went down in a demotion**: the node counts as standby whatever failed afterwards.
+
+## Error categories
+
+| Category | What happens | Examples |
+|---|---|---|
+| Fatal | the daemon does not start | no HA interface configured, the state directory cannot be created |
+| Safety critical | the operation is refused or undone, the node ends in the safe state (standby, devices down) and the event is an error | unreadable or invalid state file (silent standby, no peer pinned), missing or damaged `active.xml` (no promotion), packet filter not loaded during a promotion (promotion undone), fencing command failed or required and missing (no automatic takeover), interrupted transition at restart (standby), malformed or stale promote request (refused) |
+| Recoverable | retried, with a bound | heartbeat send, configuration push (every 5 s on failure), ruleset mirror (backoff to 5 min), outcome of a hand-over whose answer was lost (asked again for 45 s) |
+| Functional degradation | the node stays active and is marked degraded, with the reason, in the status, the widget, the metrics and the notifications | static routes not restored, a service that does not start after the takeover, the new role not saved |
+| Informational | event only | versions differ, maintenance mode, a heartbeat that arrived out of order |
+
+Every external command is bounded in time (2 minutes; package installation, the firmware update and the fencing command have their own limits), so no hung helper can hold the operations lock.
+
 ## Replication
 
 The active node pushes its whole `config.xml` as a numbered, compressed revision after every save (config syshook) and on a timer. The standby merges it with its node-local parts (hostname, HA and management interface, enabled flag and port), applies it, reloads pf only and acknowledges; on any error it rolls back and reports. Revisions are idempotent and checksummed. Drift detection compares what the daemon wrote with what is on disk.

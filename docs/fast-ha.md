@@ -100,6 +100,23 @@ The warm standby above takes the shared MAC at the takeover, and on these NICs t
 
 **Limits.** The mode is experimental and off by default: validate it on your hardware first (`lab/`, section J3 of the validation), in particular that the NIC does not transmit with the OS MAC while silent (the daemon will tell you). Rules that depend on an address of the interface (dynamic address expansions) are inactive on the standby until the takeover gives it the addresses (pf then expands them by itself): the standby holds 187 of the 227 rules of the active node here.
 
+### What a standby may send, per mode
+
+What leaves a data port of the standby. "Shared MAC" is the address the active node uses; the switch must never learn it on the standby's port.
+
+| Frame | Classic (ports down) | Warm (up, own MAC) | Hot (up, shared MAC) | How it is enforced |
+|---|---|---|---|---|
+| Anything | nothing: no link | only what is listed below | only what is listed below | classic: devices down (enforcer every second, boot guard); warm/hot: transmit watch below |
+| LLDP of the NIC firmware (X710 agent) | no | yes, with the **permanent** MAC of the port | yes, with the permanent MAC | not ours to stop; harmless (link-local, never the shared MAC); measured |
+| LACPDU of an LACP LAGG | no | - | yes (`hot_lacp` shared: the aggregate is kept up) | needed for the hot takeover; link-local, a bridge neither forwards nor learns them; exempt from the watch |
+| ARP, gratuitous ARP | no | **forbidden** | **forbidden** | no IPv4 address on the port; the takeover sends the gratuitous ARP |
+| IPv6 ND, MLD, router advertisements | no | **forbidden** | **forbidden** | IPv6 disabled (`ifdisabled`) before the port comes up, no IPv6 address |
+| DHCP, DNS, any service answer | no | **forbidden** | **forbidden** | no address; DHCP/DNS servers bound to the shared addresses are not running on a standby |
+| Routed or forwarded packets | no | **forbidden** | **forbidden** | no address; pf of the standby must hold its default deny (checked, fail closed); the mirrored ruleset keeps it |
+| STP BPDUs | no | no | no | the firewall does not run STP; the switch ports must be edge ports (see the switch checklist) |
+
+The **transmit watch** reads the software transmit counter of every silent interface (except an LACP LAGG) at each enforcer pass: one packet sent and the interface is shut down for ten minutes, the standby reports itself not ready, and the takeover falls back to the classic one. It cannot see what the NIC firmware sends by itself (LLDP above), and a driver that transmits without counting would not be seen: this was measured silent on the Intel X710 only (2381 frames in 45 s, all firmware LLDP with the permanent MAC).
+
 ### Detection time of 1 second
 
 `detect_time` (Settings, Failover) defaults to 3 s and goes down to 1 s. What was measured with 1 s on the pair above (hot standby, LACP): a crash of the active node is served again after **1.2 s** (3.0 s with the default). A false failover did not happen under 80 s of full CPU load on both nodes, filter reloads in a loop on both and a ping flood on the HA link. What a shorter time costs, and what was fixed for it:

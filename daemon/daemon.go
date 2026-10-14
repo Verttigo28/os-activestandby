@@ -220,27 +220,48 @@ func runDaemon() error {
 	return srv.ServeTLS(d.guard(ln), "", "")
 }
 
+// peerRoute is one endpoint of the peer API. Every route goes through paired (the pinned peer certificate only), and every route that
+// changes something through post as well: the table is the only place routes are declared, so none can be added without them.
+type peerRoute struct {
+	path     string
+	h        http.HandlerFunc
+	readOnly bool // any method (it reads only); otherwise POST only
+}
+
+func (d *Daemon) peerRoutes() []peerRoute {
+	return []peerRoute{
+		{"/v1/ping", d.handlePing, true},
+		{"/v1/config", d.handleConfig, false},
+		{"/v1/hb", d.handleHB, false},
+		{"/v1/promote", d.handlePromote, false},
+		{"/v1/abort", d.handleAbort, false},
+		{"/v1/handover", d.handleHandover, false},
+		{"/v1/break", d.handlePeerBreak, false},
+		{"/v1/maintenance", d.handleMaintenance, false},
+		{"/v1/preflight", d.handlePreflight, false},
+		{"/v1/dryrun", d.handleDryRun, false},
+		{"/v1/file", d.handleFile, false},
+		{"/v1/update/start", d.handleUpdateStart, false},
+		{"/v1/update/status", d.handleUpdateStatus, false},
+		{"/v1/reboot", d.handleReboot, false},
+		{"/v1/job", d.handleJobAdopt, false},
+		{"/v1/sessions", d.handleSessions, false},
+		{"/v1/ruleset", d.handleRuleset, false},
+	}
+}
+
 func (d *Daemon) peerMux() *http.ServeMux {
 	mux := http.NewServeMux()
+	// pairing: before a peer is pinned, protected by the one-time token and its HMAC (pairing.go)
 	mux.HandleFunc("/pair/hello", d.post(d.handleHello))
 	mux.HandleFunc("/pair/confirm", d.post(d.handleConfirm))
-	mux.HandleFunc("/v1/ping", d.paired(d.handlePing))
-	mux.HandleFunc("/v1/config", d.post(d.paired(d.handleConfig)))
-	mux.HandleFunc("/v1/hb", d.post(d.paired(d.handleHB)))
-	mux.HandleFunc("/v1/promote", d.post(d.paired(d.handlePromote)))
-	mux.HandleFunc("/v1/abort", d.post(d.paired(d.handleAbort)))
-	mux.HandleFunc("/v1/handover", d.post(d.paired(d.handleHandover)))
-	mux.HandleFunc("/v1/break", d.post(d.paired(d.handlePeerBreak)))
-	mux.HandleFunc("/v1/maintenance", d.post(d.paired(d.handleMaintenance)))
-	mux.HandleFunc("/v1/preflight", d.post(d.paired(d.handlePreflight)))
-	mux.HandleFunc("/v1/dryrun", d.post(d.paired(d.handleDryRun)))
-	mux.HandleFunc("/v1/file", d.post(d.paired(d.handleFile)))
-	mux.HandleFunc("/v1/update/start", d.post(d.paired(d.handleUpdateStart)))
-	mux.HandleFunc("/v1/update/status", d.post(d.paired(d.handleUpdateStatus)))
-	mux.HandleFunc("/v1/reboot", d.post(d.paired(d.handleReboot)))
-	mux.HandleFunc("/v1/job", d.post(d.paired(d.handleJobAdopt)))
-	mux.HandleFunc("/v1/sessions", d.post(d.paired(d.handleSessions)))
-	mux.HandleFunc("/v1/ruleset", d.post(d.paired(d.handleRuleset)))
+	for _, r := range d.peerRoutes() {
+		h := d.paired(r.h)
+		if !r.readOnly {
+			h = d.post(h)
+		}
+		mux.HandleFunc(r.path, h)
+	}
 	return mux
 }
 
