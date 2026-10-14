@@ -117,8 +117,13 @@ func TestPromotionDoesNotWaitForeverForAnInstallation(t *testing.T) {
 	pkgStopWait = 100 * time.Millisecond
 	hang := make(chan struct{})
 	pkgInstall = func(context.Context, []string, []string) ([]byte, error) { <-hang; return nil, nil } // ignores the cancellation
-	t.Cleanup(func() { pkgInstall, pkgStopWait = old, oldWait; close(hang) })
-	go d.ensurePackages(map[string]string{"os-example": "1.0"})
+	finished := make(chan struct{})
+	t.Cleanup(func() {
+		close(hang) // the installation ends, its goroutine returns, and only then the replaced functions are restored
+		<-finished
+		pkgInstall, pkgStopWait = old, oldWait
+	})
+	go func() { d.ensurePackages(map[string]string{"os-example": "1.0"}); close(finished) }()
 	for i := 0; i < 100; i++ {
 		d.pkgr.mu.Lock()
 		running := d.pkgr.cancel != nil
