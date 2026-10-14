@@ -24,10 +24,7 @@ func osStat(path string) (time.Time, error) {
 
 func peerHostPort(st State, port int) string { return net.JoinHostPort(st.PeerAddr, fmt.Sprint(port)) }
 
-// execShell runs a fixed script through /bin/sh (never with operator input).
-func execShell(script string) (string, error) { return execShellFor(cmdTimeout, script) }
-
-// execShellFor is execShell with its own time limit (the long operations).
+// execShellFor runs a fixed script through /bin/sh (never with operator input), within limit (the long operations).
 func execShellFor(limit time.Duration, script string) (string, error) {
 	out, err := boundedCmdFor(limit, true, "/bin/sh", "-c", script)
 	return string(out), err
