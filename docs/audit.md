@@ -185,3 +185,28 @@ Still open, and said so:
 - **No injectable clock** in the transition and heartbeat code: the latency tests sleep for real (milliseconds, scaled down), and cannot reproduce a frozen clock or a clock jump.
 - **The configuration sync (apply, rollback) and the boot path** have no Go test of their own; they run the PHP helpers and act on the interfaces. The lab and the sandbox cover them.
 - **A crash of the active node and an interrupted promotion on real hardware with this version**: see [validation](validation.md) for what was run.
+
+## Tenth round (1.0.4): the audit of ba21e4d
+
+An external audit of the commit ba21e4d listed seven points to verify; two further independent reviews read the whole repository (the Go daemon outside the files reworked in 1.0.4, and everything that is not the daemon: PHP, views, scripts, package, CI). Each finding was checked against the code, and on the lab where the code alone could not tell, before it was acted on.
+
+| Finding | Verdict | Change | Proof |
+|---|---|---|---|
+| A late heartbeat of the previous incarnation of the peer was taken after the new one | confirmed, reproduced by a test first | a higher incarnation wins; the incarnation only goes up (saved in the state directory, so a clock set back cannot lower it); a lower one is taken only after the current one has been silent for 2 s (no late message can still arrive) | `heartbeat_order_test.go` |
+| A transition ran unrecorded when the record could not be written | confirmed | a second copy in `/var/run` (it only has to survive a daemon restart); a promotion that cannot be recorded anywhere is refused, a demotion goes on | `intent_test.go` |
+| A settings file that is not valid JSON was half used | confirmed (decoding stops at the error, the fields after it keep their defaults) | last valid copy, else automatic failover off and fencing required; shown in events, status and pre-flight | `config_test.go` |
+| A damaged TLS identity was regenerated | confirmed, and worse than reported: the node kept its role while the peer refused it, both would see each other silent | two copies, restore, damaged files kept aside; a paired node with a replaced identity goes to standby | `tlsid_test.go` |
+| Plugin installation before the lock of the apply, next to a promotion | confirmed | cancelled by a promotion, never started on a node that is not standby, killed with its process group | `packages_test.go` |
+| A command blocked for 2 minutes | partly: the bound is a ceiling for a real hang, children were not killed | process group killed on timeout; the firmware update has its own 90 min limit (the 2 min bound of 1.0.4 would have stopped it: a regression of this release, found by the review) | `cmd_unix_test.go` (CI) |
+| Package upgrade stops the daemon (review) | not as reported: pkg 2.8.4 does not run the deinstall scripts of the old version (checked on the lab with a test package); but then the OLD daemon keeps running after an upgrade | the install script restarts the daemon inside a maintenance window | lab |
+| Update of the guided upgrade: status lost at a daemon restart, no deadline; maintenance blocks the election of a pair with nobody active (review) | confirmed | status read from the update log, deadline, election allowed in maintenance after an extra 2 minutes (the master still first) | `upgrade_status_test.go` |
+| Different HA/management interface keys on the two nodes (review) | confirmed (the active's HA interface was imported as a data interface) | the active node's keys are node-local too | checked on the lab with a pair of configurations |
+| MAC pinning unlocked during a demotion; enforcer holding the lock while probing; pfsync commands unbounded; proxy leaks; wall-clock deadlines stepped by the clock correction; repeated maintenance expiry writes (review) | confirmed | fixed as described in the changelog | `go test -race` in the CI |
+| GUI: wizard pfsync rule key, ACL of the page, escaping in a dialog and in attributes, kit address checks, deploy script TLS (review) | confirmed in the code; the wizard key is reasoned from the core code, not from a GUI run | fixed | JS syntax checks, PHP lint |
+
+Tests added for the scenarios of the audit: a late message after a restart; interrupted promotions and demotions at every recorded state; disk errors (role file, transition record, settings copy, identity); a failover during a plugin installation and during a configuration push; packet loss of 10/30/50 %; latency beyond the request validity; a partition of both paths (without fencing the standby takes over, the documented limit; with `fence_required` it does not; after the partition one node remains); a simultaneous restart (the master is elected, never both).
+
+Still open:
+- **Without an external arbiter, a partition of both paths makes two active nodes until a path returns** unless `fence_required` is set. This is the limit of two nodes and is said in the README.
+- A hung command in the path of a promotion can still delay it by up to 2 minutes (the bound); no helper has been seen to hang.
+- The lab validation of this release: see [validation](validation.md).
