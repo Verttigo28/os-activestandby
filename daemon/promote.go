@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -28,14 +29,13 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	if !activeValid(d.store.dir) {
 		return fmt.Errorf("active.xml is missing or damaged, cannot promote (waiting for a full resync from the active node)")
 	}
-	// local settings edited on this standby since the last sync live in config.xml only: carry them over
-	if o, err := sh(mergeScript, full, configPath(), full+".new"); err == nil {
-		syncFile(full + ".new")
-		os.Rename(full+".new", full)
-		os.Chmod(full, 0o600)
-		syncDir(d.store.dir)
-	} else {
-		log.Printf("promote: could not refresh local parts (%v: %s), using active.xml as is", err, o)
+	// The settings of THIS node that live in config.xml only (its HA and management interfaces, its host name, edits made since the
+	// last sync) are carried over into the saved configuration of the active node. If that cannot be done and checked, the promotion
+	// stops here, before anything is changed: promoting with the active node's own HA and management interface would put the address
+	// of the peer's HA link on this node.
+	if err := d.commitMergedConfig(full); err != nil {
+		d.event("error", "promotion aborted, the settings of this node cannot be carried into the configuration: %v", err)
+		return fmt.Errorf("promotion aborted: %w", err)
 	}
 	// The first change of the machine follows: from here on a failure must not leave the full config (shared IPs/MACs) on a node
 	// that stays standby, and a daemon that stops in the middle must be detected at its restart (intent.go).
@@ -346,4 +346,77 @@ func restartBoundServices() (failed []string) {
 	}
 	sort.Strings(failed)
 	return failed
+}
+
+// commitMergedConfig merges the node-local settings of config.xml into the saved configuration of the active node and replaces it
+// atomically. Every step is checked, and on any failure the saved configuration is left exactly as it was (the temporary file is
+// removed):
+//
+//  1. the merge helper writes the result next to it (full + ".new");
+//  2. the result is checked: complete, and it holds the node-local settings it was asked to keep;
+//  3. it is made private (0600: it holds password hashes and keys) and flushed to disk;
+//  4. it is renamed over the saved configuration (the commit: a reader sees the old file or the new one, never half of it);
+//  5. the directory is flushed. If that fails the new file is already in place and complete; after a power loss the old one would
+//     come back, which is consistent and merged again at the next promotion: reported, not fatal.
+func (d *Daemon) commitMergedConfig(full string) error {
+	tmp := full + ".new"
+	os.Remove(tmp) // whatever a crash left of an earlier attempt
+	abort := func(format string, a ...any) error {
+		os.Remove(tmp)
+		return fmt.Errorf(format, a...)
+	}
+	if out, err := d.run(mergeScript, full, configPath(), tmp); err != nil {
+		return abort("the merge of the local settings failed: %v: %s", err, out)
+	}
+	if err := mergedConfigOK(tmp, configPath()); err != nil {
+		return abort("the merged configuration is not usable: %v", err)
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return abort("the merged configuration cannot be made private: %v", err)
+	}
+	flush := syncFile
+	if d.act != nil && d.act.syncFile != nil {
+		flush = d.act.syncFile
+	}
+	if err := flush(tmp); err != nil {
+		return abort("the merged configuration cannot be flushed to disk: %v", err)
+	}
+	rename := os.Rename
+	if d.act != nil && d.act.rename != nil {
+		rename = d.act.rename
+	}
+	if err := rename(tmp, full); err != nil {
+		return abort("the merged configuration cannot replace the saved one: %v", err)
+	}
+	if err := syncDir(d.store.dir); err != nil {
+		log.Printf("promote: the directory of the saved configuration could not be flushed (%v): the merged file is in place", err)
+	}
+	return nil
+}
+
+// mergedConfigOK checks the result of the merge: a complete configuration file that still holds this node's host name (what the
+// merge is there to keep). local is the configuration in use, whose host name must be in the result.
+func mergedConfigOK(merged, local string) error {
+	b, err := os.ReadFile(merged)
+	if err != nil {
+		return err
+	}
+	if len(b) < 200 || !strings.Contains(string(b[:min(len(b), 4096)]), "<opnsense") || !strings.Contains(string(b[max(0, len(b)-64):]), "</opnsense>") {
+		return fmt.Errorf("incomplete (%d bytes)", len(b))
+	}
+	if lb, err := os.ReadFile(local); err == nil {
+		if h := hostnameOf(lb); h != "" && hostnameOf(b) != h {
+			return fmt.Errorf("the host name of this node (%q) is not in the result (%q)", h, hostnameOf(b))
+		}
+	}
+	return nil
+}
+
+var hostnameRe = regexp.MustCompile(`<hostname>([^<]*)</hostname>`)
+
+func hostnameOf(b []byte) string {
+	if m := hostnameRe.FindSubmatch(b); m != nil {
+		return strings.TrimSpace(string(m[1]))
+	}
+	return ""
 }

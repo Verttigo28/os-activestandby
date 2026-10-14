@@ -183,7 +183,16 @@ class PairingController extends ApiControllerBase
         if (!$this->request->isPost()) {
             return ['error' => 'POST required'];
         }
-        return $this->ctl($this->request->getPost('force') === '1' ? 'ctl_promote_force' : 'ctl_promote');
+        // a forced promotion (the peer is not asked: a double active node is possible) is another endpoint, in the administrator tier
+        return $this->ctl('ctl_promote');
+    }
+
+    public function promoteforceAction()
+    {
+        if (!$this->request->isPost()) {
+            return ['error' => 'POST required'];
+        }
+        return $this->ctl('ctl_promote_force');
     }
 
     public function eventsAction()

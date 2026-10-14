@@ -178,7 +178,7 @@ func (d *Daemon) localHB() hbMsg {
 	s := d.hb.seq
 	d.hb.mu.Unlock()
 	return hbMsg{Role: st.Role, State: st.State, Epoch: st.Epoch, Proto: protoVersion, Inc: d.hb.inc, Seq: s, Mgmt: d.mgmtAddr(), TimeMs: time.Now().UnixMilli(), Ver: d.localVer, Plug: version,
-		Resync:       st.State == StateStandby && st.PeerFP != "" && (!activeValid(d.store.dir) || d.driftDetected()),
+		Resync:       st.State == StateStandby && st.PeerFP != "" && (!activeValid(d.store.dir) || d.driftDetected() || d.pkgRetryDue()),
 		Links:        d.health.snapshotLinks(),
 		LinksUnknown: d.health.snapshotUnknown(),
 		Health:       d.healthReason(),
@@ -204,6 +204,11 @@ func (d *Daemon) handleHB(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) learnPeerMgmt(addr string) {
+	// what the peer says about itself is data: only an IPv4 literal (never a host name to resolve, a port, or a 64 KB string) is kept,
+	// because this node then opens connections to it and admits it at its guard
+	if ip := net.ParseIP(addr); addr != "" && (ip == nil || ip.To4() == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast()) {
+		return
+	}
 	if addr != "" && d.store.Get().PeerMgmt != addr {
 		d.store.Update(func(s *State) { s.PeerMgmt = addr })
 	}

@@ -266,10 +266,13 @@ type actions struct {
 	sh          func(name string, args ...string) (string, error)
 	plan        func(path string) (WarmPlan, error)
 	flush       func(dev string)
-	fence       func() error            // replaces running the fencing command
-	standbyView func(full string) error // replaces writing the standby view of config.xml
-	apply       func(xml []byte) error  // replaces applyConfig (it runs the PHP helpers)
-	ping        func(addr string) bool  // replaces the ping of the peer system (true: it answers)
+	fence       func() error                        // replaces running the fencing command
+	standbyView func(full string) error             // replaces writing the standby view of config.xml
+	apply       func(xml []byte) error              // replaces applyConfig (it runs the PHP helpers)
+	ping        func(addr string) bool              // replaces the ping of the peer system (true: it answers)
+	arp         func(addr string) bool              // replaces the ARP resolution of the peer system (with ping set and arp nil: no answer)
+	rename      func(oldPath, newPath string) error // replaces os.Rename in the commit of the merged configuration
+	syncFile    func(path string) error             // replaces the flush of a file written by a helper
 }
 
 func (d *Daemon) doPromote(reason string) error {

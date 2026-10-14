@@ -75,7 +75,6 @@ func TestPeerSystemProbeScenarios(t *testing.T) {
 	old := carrier
 	carrier = func(string) bool { return true }
 	t.Cleanup(func() { carrier = old })
-	const arpAnswer = "? (10.99.0.1) at 0c:c4:7a:1:2:3 on igb0 expires in 1197 seconds [ethernet]"
 	for _, tc := range []struct {
 		name      string
 		icmp      map[string]bool // address -> answers ping
@@ -92,12 +91,7 @@ func TestPeerSystemProbeScenarios(t *testing.T) {
 			m := newPairModel(t)
 			m.b.store.Update(func(s *State) { s.PeerAddr, s.PeerMgmt = "10.99.0.1", "192.168.225.212" })
 			m.b.act.ping = func(addr string) bool { return tc.icmp[addr] }
-			m.b.act.sh = func(name string, args ...string) (string, error) {
-				if name == "arp" && len(args) == 2 && args[0] == "-n" && tc.arp {
-					return arpAnswer, nil
-				}
-				return "", nil
-			}
+			m.b.act.arp = func(addr string) bool { return tc.arp && addr == "10.99.0.1" }
 			if tc.wantAfter {
 				m.exposed[m.a].Store(false)
 				m.a.store.Update(func(s *State) { s.State = StateStandby })

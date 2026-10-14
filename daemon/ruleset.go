@@ -200,7 +200,7 @@ var (
 	rsHostIDRe = regexp.MustCompile(`^set hostid `)
 	rsLimitRe  = regexp.MustCompile(`^set limit (\S+) `)
 	// a ruleset of the peer must not make pfctl read other files of this node
-	rsFileDirectiveRe = regexp.MustCompile(`(?m)^\s*(include\s|load\s+anchor)`)
+	rsFileDirectiveRe = regexp.MustCompile(`(?m)^\s*(include\s|load\s+anchor)|\bfile\s+"`) // a table can also read a file: table <x> file "/path"
 )
 
 // localizeRules replaces the node-specific `set` lines of the active node's ruleset with the ones of this node's own ruleset.

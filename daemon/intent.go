@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -177,7 +178,16 @@ func (d *Daemon) toSafeStandby(why string, saveActive bool) bool {
 	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 	d.enforceOnce()
 	d.run("configctl", "filter", "reload")
-	return saveErr == nil && viewOK
+	// read the devices back, like a demotion does: a role "standby" with a device that is still up is what this routine is there to
+	// prevent. The enforcer goes on trying every second; until it succeeds the recovery is not over (the record stays).
+	devsOK := true
+	if set := d.ops.cache; len(set.ForceDown) > 0 {
+		if bad := d.standbyDown(set.ForceDown, d.warmSet(full, set)); len(bad) > 0 {
+			d.event("error", "%s: %s still up or still carrying an address: the node keeps trying (enforcer), the transition record stays", why, strings.Join(bad, ", "))
+			devsOK = false
+		}
+	}
+	return saveErr == nil && viewOK && devsOK
 }
 
 // doStandbyView writes the standby view of the configuration (a seam for the tests).

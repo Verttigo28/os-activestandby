@@ -373,6 +373,9 @@ func (d *Daemon) icmpAnswers(addr string) bool {
 }
 
 func (d *Daemon) arpAnswers(addr string) bool {
+	if d.act != nil && d.act.ping != nil { // a test: never the real commands
+		return d.act.arp != nil && d.act.arp(addr)
+	}
 	d.run("arp", "-d", addr)
 	d.run("ping", "-c", "1", "-W", "300", "-q", addr) // makes the kernel ask who has addr, whatever the answer to the echo is
 	out, err := d.run("arp", "-n", addr)

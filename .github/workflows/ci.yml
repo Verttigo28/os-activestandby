@@ -69,8 +69,12 @@ jobs:
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
         with:
           php-version: '8.3'
-      - name: PHP syntax
-        run: find src -name '*.php' -print0 | xargs -0 -n1 php -l > /dev/null
+      - name: PHP syntax, and the scripts start with their interpreter line (a stray line before it passes php -l and then cannot be executed)
+        run: |
+          find src -name '*.php' -print0 | xargs -0 -n1 php -l > /dev/null
+          for f in src/opnsense/scripts/OPNsense/ActiveStandby/*.php src/opnsense/scripts/OPNsense/ActiveStandby/*.sh; do
+            head -n 1 "$f" | grep -q '^#!' || { echo "no interpreter line at the start of $f"; exit 1; }
+          done
       - name: XML well-formedness (model, ACL, menu, forms, widget metadata)
         run: |
           python3 - <<PY

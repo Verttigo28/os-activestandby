@@ -226,3 +226,128 @@ func TestFailedBootPathLeavesTheDaemonToDoIt(t *testing.T) {
 		t.Fatal("the daemon must take the booted node to standby")
 	}
 }
+
+// a standby whose boot path stopped between saving the role and writing the view: config.xml may still be the full configuration;
+// the daemon writes the view at its first start of the boot
+func TestStandbyWhoseBootPathStoppedBeforeTheViewGetsTheView(t *testing.T) {
+	d := nodeOnDisk(t, standbyState(RoleStandby, 7), nil, "")
+	var r recorder
+	r.install(d, nil)
+	bootAt(t, d, time.Minute)
+	d.checkBoot()
+	if r.views != 1 {
+		t.Fatalf("standby views written: %d", r.views)
+	}
+	d.checkBoot() // the boot is checked: no second view
+	if r.views != 1 {
+		t.Fatal("written again")
+	}
+}
+
+// kern.boottime moves when the clock is stepped: the marker of this boot still counts, an earlier boot's does not
+func TestBootMarkerToleratesAClockStep(t *testing.T) {
+	now := time.Now().Unix()
+	s := func(v int64) string { return strconv.FormatInt(v, 10) }
+	if !sameBoot(s(now), s(now+40)) || !sameBoot(s(now), s(now-40)) {
+		t.Fatal("a clock step of a few seconds is the same boot")
+	}
+	if sameBoot(s(now-3600), s(now)) {
+		t.Fatal("a boot an hour earlier is another boot")
+	}
+	if sameBoot("garbage", s(now)) || sameBoot("", s(now)) {
+		t.Fatal("an unreadable marker is not a marker")
+	}
+}
+
+// the recovery of a node that cannot take a device down is not over: the record stays (the enforcer goes on)
+func TestRecoveryIsNotOverWhileADeviceIsStillUp(t *testing.T) {
+	h := newWire(macShared1).host("A", map[string]*fakeDev{"vlan0.10": active("10.0.10.1", macShared1)})
+	h.devs["vlan0.10"].refuseDown = true
+	d := demotionNode(t, h, "vlan0.10")
+	d.store.Update(func(s *State) { s.PeerFP = "fp" })
+	loadIfacesHook = func(string) (IfaceSet, error) { return IfaceSet{ForceDown: []string{"vlan0.10"}, HAKey: "opt9"}, nil }
+	os.WriteFile(activeXML(d.store.dir), []byte("<?xml version=\"1.0\"?><opnsense>"+strings.Repeat("<x>filler</x>", 30)+"</opnsense>\n"), 0o600)
+	d.beginIntent(intentDemote, "test")
+	d.recoverTransition()
+	if d.store.Get().State != StateStandby {
+		t.Fatal("standby in memory")
+	}
+	if !recordExists(d) {
+		t.Fatal("a device is still up: the recovery is not over and the record must stay")
+	}
+	h.w.mu.Lock()
+	h.devs["vlan0.10"].refuseDown = false
+	h.w.mu.Unlock()
+	d.recoverTransition()
+	if recordExists(d) {
+		t.Fatal("the device went down: the recovery is over")
+	}
+}
+
+func TestOnlyPluginsAreInstalledOnTheWordOfThePeer(t *testing.T) {
+	for name, want := range map[string]bool{
+		"os-haproxy": true, "os-node_exporter": true, "os-a": true,
+		"sudo": false, "nmap": false, "opnsense": false, "os-": false, "-os-x": false, "os-x y": false, "os-$(id)": false, "../os-x": false, "": false,
+		"os-" + strings.Repeat("a", 90): false,
+	} {
+		if pkgName.MatchString(name) != want {
+			t.Errorf("%q: want %v", name, want)
+		}
+	}
+}
+
+// the address that the peer announces for its management interface is data: only an IPv4 literal is kept
+func TestPeerManagementAddressIsValidated(t *testing.T) {
+	d := newHANode(t, standbyState(RoleStandby, 5))
+	for _, bad := range []string{"evil.example.com", "10.0.0.1:7690", "::1", "127.0.0.1", "0.0.0.0", "224.0.0.1", strings.Repeat("a", 60000), "10.0.0.1 ", "999.1.1.1"} {
+		d.learnPeerMgmt(bad)
+		if got := d.store.Get().PeerMgmt; got != "" {
+			t.Fatalf("%q was kept as %q", bad, got)
+		}
+	}
+	d.learnPeerMgmt("192.168.225.212")
+	if d.store.Get().PeerMgmt != "192.168.225.212" {
+		t.Fatal("a valid address must be learned")
+	}
+}
+
+// a pf table can read a file as well: table <x> file "/path"
+func TestMirroredRulesetMayNotReadFiles(t *testing.T) {
+	for _, line := range []string{"table <x> persist file \"/etc/master.passwd\"", "table <x> file \"/etc/ssh/ssh_host_ed25519_key\"", "include \"/tmp/x\"", "load anchor \"a\" from \"/tmp/y\""} {
+		if !rsFileDirectiveRe.MatchString(line) {
+			t.Errorf("%q must be refused", line)
+		}
+	}
+	for _, line := range []string{"block drop in all", "pass in quick on igb0 proto tcp from any to (self) port 7690", "table <bogons> { 10.0.0.0/8 }"} {
+		if rsFileDirectiveRe.MatchString(line) {
+			t.Errorf("%q is an ordinary rule", line)
+		}
+	}
+}
+
+// a peer that claims to be active must not be able to walk the clock of the standby: the total moved in an hour is bounded
+func TestClockStepsHaveAnHourlyBudget(t *testing.T) {
+	clockSteps.mu.Lock()
+	clockSteps.steps = nil
+	clockSteps.mu.Unlock()
+	t.Cleanup(func() { clockSteps.mu.Lock(); clockSteps.steps = nil; clockSteps.mu.Unlock() })
+	d := newHANode(t, standbyState(RoleStandby, 5))
+	allowed := 0
+	for i := 0; i < 20; i++ {
+		if d.clockBudgetAllows(maxClockStepMs) { // the largest step the single limit allows
+			allowed++
+		}
+	}
+	if allowed != 3 {
+		t.Fatalf("%d steps of 5 minutes allowed in an hour, want 3 (15 minutes)", allowed)
+	}
+	// small drifts keep working while the budget lasts
+	clockSteps.mu.Lock()
+	clockSteps.steps = nil
+	clockSteps.mu.Unlock()
+	for i := 0; i < 100; i++ {
+		if !d.clockBudgetAllows(3000) {
+			t.Fatalf("a normal correction of 3 s was refused at step %d", i)
+		}
+	}
+}

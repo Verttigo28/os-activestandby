@@ -23,6 +23,13 @@ func (r *recorder) install(d *Daemon, viewErr error) {
 	d.act.sh = func(name string, args ...string) (string, error) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
+		if name == mergeScript && len(args) == 3 { // the merge of the node-local settings: the result is the saved configuration itself
+			b, err := os.ReadFile(args[0])
+			if err == nil {
+				err = os.WriteFile(args[2], b, 0o600)
+			}
+			return "", err
+		}
 		r.cmds = append(r.cmds, strings.Join(append([]string{name}, args...), " "))
 		return "", nil
 	}

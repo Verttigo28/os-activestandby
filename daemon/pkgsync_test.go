@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -87,3 +88,47 @@ func TestCoreVersionDifferenceStillBlocksTheSync(t *testing.T) {
 		t.Fatalf("a configuration of another core version must be refused: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Reported by the review: with a valid saved configuration the standby acknowledges an UNCHANGED push without looking at the plugins,
+// and the active node never pushes unchanged content again, so a failed plugin was never retried. After the delay the standby asks
+// for a full push (the heartbeat flag) and applies it although the content is the same.
+func TestFailedPluginIsRetriedEvenIfTheConfigurationDoesNotChange(t *testing.T) {
+	hold := currentPackages
+	currentPackages = func() map[string]string { return map[string]string{"opnsense": "26.7"} }
+	t.Cleanup(func() { currentPackages = hold })
+	d := newHANode(t, standbyState(RoleStandby, 5))
+	d.health = newHealthState()
+	os.WriteFile(activeXML(d.store.dir), []byte("<?xml version=\"1.0\"?><opnsense>"+strings.Repeat("<x>filler</x>", 30)+"</opnsense>\n"), 0o600)
+	var installs atomic.Int32
+	old := pkgInstall
+	pkgInstall = func(context.Context, []string, []string) ([]byte, error) {
+		installs.Add(1)
+		return []byte("Forbidden"), errors.New("exit status 3")
+	}
+	t.Cleanup(func() { pkgInstall = old })
+	d.act.apply = func([]byte) error { return nil }
+	pushPackages(t, d, "50")
+	if installs.Load() != 1 || d.localHBResync() {
+		t.Fatalf("installs %d, resync asked %v", installs.Load(), d.localHBResync())
+	}
+	pushPackages(t, d, "51") // the same content: acknowledged without looking at the plugins, no new attempt
+	if installs.Load() != 1 {
+		t.Fatalf("installs %d", installs.Load())
+	}
+	// the delay is over: the standby asks for a push, and the next one (the same content) tries the installation again
+	d.pkgRetry.mu.Lock()
+	d.pkgRetry.at = time.Now().Add(-pkgRetryAfter - time.Second)
+	d.pkgRetry.mu.Unlock()
+	if !d.localHBResync() {
+		t.Fatal("after the delay the standby must ask the active node for a full push")
+	}
+	pushPackages(t, d, "52")
+	if installs.Load() != 2 {
+		t.Fatalf("installs %d: the unchanged content must not short-circuit the retry", installs.Load())
+	}
+	if d.localHBResync() {
+		t.Fatal("the delay starts again after a failed attempt")
+	}
+}
+
+func (d *Daemon) localHBResync() bool { return d.localHB().Resync }

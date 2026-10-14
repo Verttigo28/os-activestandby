@@ -26,8 +26,8 @@ type UpdateInfo struct {
 
 func loadUpdateInfo() UpdateInfo {
 	var u UpdateInfo
-	if fi, err := os.Lstat(pkgUpgradeJSON); err != nil || !fi.Mode().IsRegular() || fi.Size() > 1<<20 {
-		return u // missing, a link, or implausibly large: nothing to trust
+	if fi, err := os.Lstat(pkgUpgradeJSON); err != nil || !fi.Mode().IsRegular() || fi.Size() > 1<<20 || fi.Mode().Perm()&0o022 != 0 || checkOwnerRoot(fi) != nil {
+		return u // missing, a link, implausibly large, writable by others or not written by root (/tmp is shared): nothing to trust
 	}
 	b, err := os.ReadFile(pkgUpgradeJSON)
 	if err != nil {

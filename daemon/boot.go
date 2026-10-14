@@ -94,8 +94,28 @@ func firstStartOfThisBoot() (first, known bool) {
 		return false, true
 	}
 	b, err := os.ReadFile(bootMarkerPath)
-	return err != nil || strings.TrimSpace(string(b)) != bt, true
+	if err != nil {
+		return true, true
+	}
+	return !sameBoot(strings.TrimSpace(string(b)), bt), true
 }
+
+// sameBoot: the marker and the boot time of the kernel belong to the same boot. kern.boottime moves when the clock is stepped (ntpd
+// -g, an RTC that is wrong at boot), so they are compared with a margin; two boots are never that close.
+func sameBoot(marker, now string) bool {
+	a, err1 := strconv.ParseInt(marker, 10, 64)
+	b, err2 := strconv.ParseInt(now, 10, 64)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= bootSkew
+}
+
+const bootSkew = 300 // seconds
 
 // checkBoot runs once at the start of the daemon. A paired node that is "active" on disk at the first start of a boot did not go
 // through the standby path (bootStandby failed: a full or read-only /conf, a PHP error): a paired node never comes up active on
@@ -111,6 +131,14 @@ func (d *Daemon) checkBoot() {
 	if first && st.PeerFP != "" && st.State == StateActive {
 		d.event("error", "this node starts as ACTIVE although it was just booted: the standby path of the boot did not complete. Going to STANDBY; the peer or the election decides who serves")
 		d.toSafeStandby("boot without the standby path", true)
+	} else if first && st.PeerFP != "" && st.State == StateStandby && activeValid(d.store.dir) {
+		// standby on disk, but the boot path did not complete: it saves the role before it writes the standby view, so config.xml may
+		// still be the full configuration (shared addresses and MAC that OPNsense would bring up). Write the view now.
+		if err := d.doStandbyView(activeXML(d.store.dir)); err != nil {
+			d.event("error", "the standby view of the configuration could not be written after a boot whose standby path did not complete: %v", err)
+			return // not marked: tried again at the next start
+		}
+		d.event("warning", "the standby path of the boot did not complete: the standby view of the configuration was written now")
 	}
 	markBootHandled()
 }

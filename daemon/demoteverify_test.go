@@ -90,3 +90,29 @@ func TestDemotionTriesAFailedDeviceAgain(t *testing.T) {
 func active(ip, mac string) *fakeDev {
 	return &fakeDev{up: true, carrier: true, ether: mac, hw: "00:11:22:33:44:55", inet: []string{ip}}
 }
+
+// the failed demotion leaves a clean state: the node keeps serving, says that it is degraded, and has no transition record that a
+// restart would take for a demotion cut short (it would take the only serving node to standby)
+func TestFailedDemotionLeavesNoRecordAndShowsDegraded(t *testing.T) {
+	h := newWire(macShared1).host("A", map[string]*fakeDev{"vlan0.10": active("10.0.10.1", macShared1)})
+	h.devs["vlan0.10"].refuseDown = true
+	d := demotionNode(t, h, "vlan0.10")
+	if err := d.demoteHook("test", nil); err == nil {
+		t.Fatal("must fail")
+	}
+	if recordExists(d) {
+		t.Fatal("a record of a demotion that did not happen would, at a restart, take the serving node to standby")
+	}
+	if !strings.Contains(d.degradedReason(), "vlan0.10") {
+		t.Fatalf("not shown as degraded: %q", d.degradedReason())
+	}
+	// asked again (the split-brain rule does it every few seconds): no new file and no new event for the same unreplicated content
+	d.store.Update(func(s *State) { s.AckedSHA = "someotherhash" })
+	for i := 0; i < 3; i++ {
+		d.demoteHook("test", nil)
+	}
+	cfg, _ := os.ReadFile(os.Getenv("HASYNC_CONFIG"))
+	if _, err := os.Stat(filepath.Join(d.store.dir, "unreplicated-"+shaHex(cfg)[:12]+".xml")); err != nil {
+		t.Fatalf("the unreplicated content must be saved once, under a name that carries its hash: %v", err)
+	}
+}

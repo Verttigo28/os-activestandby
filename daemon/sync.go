@@ -157,7 +157,7 @@ func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 	// Only the active node pushes, one revision at a time, so ordering is not a safety issue. A revision number we already
 	// have must never wedge the sync (e.g. the ack of a push got lost when a daemon restarted): content we already applied
 	// is acknowledged as a no-op (unless drift was detected, then it is applied again), anything else is applied.
-	if sha := r.Header.Get("X-SHA256"); sha != "" && sha == st.AppliedSHA && !d.driftDetected() && activeValid(d.store.dir) {
+	if sha := r.Header.Get("X-SHA256"); sha != "" && sha == st.AppliedSHA && !d.driftDetected() && !d.pkgRetryDue() && activeValid(d.store.dir) {
 		d.store.Update(func(s *State) {
 			s.LeaderEpoch = max(s.LeaderEpoch, epoch)
 			if rev > s.SyncRev {

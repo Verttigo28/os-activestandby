@@ -1,18 +1,4 @@
-$mask = (int)$ha->subnet;
-if ($mask < 1 || $mask > 31) { // an empty or odd prefix would make every address "in the subnet"
-    fail("The HA interface $haKey has no usable IPv4 prefix (" . (string)$ha->subnet . ")");
-}
-$bits = (0xFFFFFFFF << (32 - $mask)) & 0xFFFFFFFF;
-$ip = ip2long($haIp);
-if ($ip === false || ($ip & $bits) !== (ip2long((string)$ha->ipaddr) & $bits)) {
-    fail("The HA address $haIp is not in the HA subnet " . (string)$ha->ipaddr . "/$mask");
-}
-if ($mask <= 30 && (($ip & ~$bits & 0xFFFFFFFF) === 0 || ($ip & ~$bits & 0xFFFFFFFF) === (~$bits & 0xFFFFFFFF))) {
-    fail("The HA address $haIp is the network or broadcast address of its subnet");
-}
-if ($haIp === (string)$ha->ipaddr || ($primaryHa !== "" && $haIp === $primaryHa)) {
-    fail("The HA address $haIp is the address of this (primary) firewall");
-}#!/usr/local/bin/php
+#!/usr/local/bin/php
 <?php
 
 /*

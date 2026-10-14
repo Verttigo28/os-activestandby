@@ -59,7 +59,7 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 			}
 			continue
 		}
-		if name == "os-activestandby" {
+		if name == "os-activestandby" { // handled by the plugin synchronisation, never by this path
 			continue // this plugin ships with the node
 		}
 		if !pkgName.MatchString(name) { // the name comes from the peer: never let it look like an option or contain odd characters
@@ -141,7 +141,9 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 	return nil
 }
 
-var pkgName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._-]{0,80}$`)
+// only plugins (os-*) are installed on the word of the peer, and never this plugin itself: a peer must not be able to have an arbitrary
+// package, with its install scripts running as root, installed here
+var pkgName = regexp.MustCompile(`^os-[A-Za-z0-9][A-Za-z0-9+._-]{0,76}$`)
 
 // packageDiff compares the active node's plugin list (want) with what is installed here (have). "different" lists plugins
 // that are missing or at another version, "extra" the plugins installed here that the active node does not have. The core
@@ -279,3 +281,12 @@ var currentPackages = func() map[string]string { return collectInfo().Packages }
 
 // pkgBinary is the command that installs packages (a variable for the tests).
 var pkgBinary = "pkg"
+
+// pkgRetryDue: a plugin installation failed earlier and its delay is over. The standby then asks the active node for a full push
+// (the heartbeat flag Resync), because an unchanged configuration is otherwise never sent again, and applies it even if the content is
+// the one it already has, which is what runs ensurePackages again.
+func (d *Daemon) pkgRetryDue() bool {
+	d.pkgRetry.mu.Lock()
+	defer d.pkgRetry.mu.Unlock()
+	return d.pkgRetry.key != "" && time.Since(d.pkgRetry.at) >= pkgRetryAfter
+}

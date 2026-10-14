@@ -110,7 +110,7 @@
         function takeover(force) {
             $('#takeResult').attr('class', 'alert alert-info').html('<i class="fa fa-spinner fa-spin"></i> {{ lang._('Taking over...') }}').show();
             $('#btnTakeover, #btnTakeoverForce').prop('disabled', true);
-            ajaxCall(force ? '/api/activestandby/pairing/promote' : '/api/activestandby/pairing/failover', force ? {force: '1'} : {}, function (r) {
+            ajaxCall(force ? '/api/activestandby/pairing/promoteforce' : '/api/activestandby/pairing/failover', {}, function (r) {
                 $('#btnTakeover, #btnTakeoverForce').prop('disabled', false);
                 showResult('#takeResult', r);
                 refreshStatus();

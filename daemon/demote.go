@@ -31,8 +31,9 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) (retErr error) {
 		// config.xml is the authoritative full config right now: keep it
 		if b, err := os.ReadFile(configPath()); err == nil && st.AckedSHA != "" && shaHex(b) != st.AckedSHA {
 			// edits the peer never received: keep them aside, the peer's config will replace this one
-			keep := filepath.Join(d.store.dir, fmt.Sprintf("unreplicated-%d.xml", time.Now().Unix()))
-			if writeFileDurable(keep, b, 0o600) == nil {
+			// one file per content: a split-brain loser that is asked again every few seconds must not write a file and an event each time
+			keep := filepath.Join(d.store.dir, "unreplicated-"+shaHex(b)[:12]+".xml")
+			if _, err := os.Stat(keep); err != nil && writeFileDurable(keep, b, 0o600) == nil {
 				d.event("warning", "this node had configuration changes the peer never received; saved to %s before demoting", keep)
 			}
 		}
@@ -91,6 +92,12 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) (retErr error) {
 		}
 		if bad = d.standbyDown(set.ForceDown, warm); len(bad) > 0 {
 			d.event("error", "standing down failed: %s still up or still carrying an address after being taken down: the peer is not released", strings.Join(bad, ", "))
+			// The node stays active (some of its devices are down already: a partial outage, shown as degraded). The transition record is
+			// removed: this node is not in the middle of a role change, and a restart must not take the one node that still serves to
+			// standby on the strength of a record. The next attempt (the split-brain rule tries again every few seconds, an operator or the
+			// health switch can) writes a new one.
+			d.endIntent()
+			d.markDegraded("standing down failed: %s did not go down", strings.Join(bad, ", "))
 			return fmt.Errorf("standing down failed: %s did not go down; this node keeps its role (the peer must not take over while it can still transmit with the shared identity)", strings.Join(bad, ", "))
 		}
 	}
