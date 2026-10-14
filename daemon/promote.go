@@ -17,7 +17,8 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	t0 := time.Now()
 	ph := &phaseLog{t0: t0}
 	log.Printf("PROMOTE (%s)", reason)
-	d.rs.set("") // a node that becomes active holds its own ruleset, not a mirror
+	d.rs.set("")           // a node that becomes active holds its own ruleset, not a mirror
+	d.stopPackageInstall() // a plugin installation must not run next to the takeover
 	if d.store.Get().State == StateActive {
 		return nil
 	}
@@ -37,7 +38,9 @@ func (d *Daemon) promote(reason string) (retErr error) {
 	}
 	// The first change of the machine follows: from here on a failure must not leave the full config (shared IPs/MACs) on a node
 	// that stays standby, and a daemon that stops in the middle must be detected at its restart (intent.go).
-	d.beginIntent(intentPromote, reason)
+	if err := d.beginIntent(intentPromote, reason); err != nil {
+		return fmt.Errorf("promotion refused, it could not be recorded (a crash in the middle would not be recognised): %w", err)
+	}
 	earlyStarted := false // the full ruleset is loaded before the interfaces are up (below)
 	// the two things that run in the background of the interface bring-up; the cleanup below waits for both, otherwise it
 	// would rewrite the configuration and reload the packet filter while they are still generating from the full one

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -146,9 +147,15 @@ func (d *Daemon) jobStep() {
 		}
 		m, err := d.peerCall("/v1/update/status", 20*time.Second)
 		if err != nil {
+			if time.Since(parseTime(j.Updated)) > updateTimeout+10*time.Minute {
+				d.jobFail("the standby did not report on its update in time: " + err.Error())
+			}
 			return // the standby may be busy; keep waiting
 		}
 		if done, _ := m["done"].(bool); !done {
+			if time.Since(parseTime(j.Updated)) > updateTimeout+10*time.Minute {
+				d.jobFail("the update on the standby did not finish in time")
+			}
 			return
 		}
 		if rc, _ := m["rc"].(float64); rc != 0 {
@@ -316,9 +323,9 @@ func (d *Daemon) handleUpdateStart(w http.ResponseWriter, r *http.Request) {
 	unlockConfig()
 	proxy := "http://" + peerHostPort(st, proxyPort(d.cfg))
 	go func() {
-		out, err := execShell(
-			"export HTTP_PROXY=" + proxy + " HTTPS_PROXY=" + proxy + "; (opnsense-update; echo \"opnsense-update rc=$?\"; pkg upgrade -y; echo \"pkg upgrade rc=$?\") > " + updateLog + " 2>&1; " +
-				"tail -c 4000 " + updateLog + " | grep -q 'pkg upgrade rc=0'")
+		out, err := execShellFor(updateTimeout,
+			"export HTTP_PROXY="+proxy+" HTTPS_PROXY="+proxy+"; (opnsense-update; echo \"opnsense-update rc=$?\"; pkg upgrade -y; echo \"pkg upgrade rc=$?\") > "+updateLog+" 2>&1; "+
+				"tail -c 4000 "+updateLog+" | grep -q 'pkg upgrade rc=0'")
 		_ = out
 		d.upd.mu.Lock()
 		d.upd.running, d.upd.done = false, true
@@ -335,15 +342,38 @@ func (d *Daemon) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	d.upd.mu.Lock()
 	running, done, rc := d.upd.running, d.upd.done, d.upd.rc
 	d.upd.mu.Unlock()
-	tail := ""
+	tail, full := "", ""
 	if b, err := os.ReadFile(updateLog); err == nil {
-		s := string(b)
-		if len(s) > 400 {
-			s = s[len(s)-400:]
+		full = string(b)
+		tail = full
+		if len(tail) > 400 {
+			tail = tail[len(tail)-400:]
 		}
-		tail = s
+	}
+	if !running && !done {
+		// this daemon did not start the update it is asked about: it was restarted while the update ran (the upgrade of this plugin
+		// restarts it). The update itself went on, and its log says how far it is.
+		running, done, rc = updateFromLog(full)
 	}
 	writeJSON(w, 200, map[string]any{"running": running, "done": done, "rc": rc, "tail": tail})
+}
+
+// updateFromLog reads the state of an update from its log: done when the last step ("pkg upgrade rc=N") was written, running before
+// (a log that exists); nothing to report when there is no log.
+func updateFromLog(log string) (running, done bool, rc int) {
+	i := strings.LastIndex(log, "pkg upgrade rc=")
+	if i < 0 {
+		return log != "", false, 0
+	}
+	v := strings.TrimSpace(log[i+len("pkg upgrade rc="):])
+	if j := strings.IndexAny(v, " \n\r"); j >= 0 {
+		v = v[:j]
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		n = 1
+	}
+	return false, true, n
 }
 
 func (d *Daemon) handleReboot(w http.ResponseWriter, r *http.Request) {

@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -98,20 +100,40 @@ func (h *Heartbeat) RTT(path string) time.Duration {
 	return h.rtt[path]
 }
 
+// staleWindow bounds how late a message of the peer can arrive: a heartbeat is abandoned by its sender after one second (the client
+// timeout of hbLoop), an answer is read within that second. Twice that is a safe margin.
+const staleWindow = 2 * time.Second
+
 // seen records a heartbeat (or the answer to one) of the peer and reports whether it was taken. Two paths deliver them, at different
-// speeds, and an answer can be delayed: a message that is older than one already taken (same incarnation of the peer daemon, a
-// sequence number not above the last one) carries an old state and an old proof of life, so it changes nothing. A peer daemon that
-// restarted has a new incarnation and starts again at sequence 1. A peer that sends no incarnation (plugin 1.0.3 and older) is taken
-// as before.
+// speeds, and an answer can be late, so a message may arrive after a newer one. Each daemon sends its incarnation (increasing across
+// its restarts, see nextIncarnation) and a sequence number. A message is taken when it is newer:
+//   - same incarnation and a higher sequence number;
+//   - a higher incarnation (the peer daemon restarted);
+//   - a lower incarnation only once the current one has been silent for staleWindow: no late message of it can still arrive, so
+//     the lower one is the peer that restarted with a clock set back and no saved counter, not an old message.
+//
+// A message that is not taken changes nothing: neither the state of the peer nor its proof of life. A peer that sends no incarnation
+// (plugin 1.0.3 and older) is taken as before.
 func (h *Heartbeat) seen(path string, m hbMsg) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if m.Inc != 0 && m.Inc == h.peerInc && m.Seq <= h.peerSeq {
+	now := time.Now()
+	take := false
+	switch {
+	case m.Inc == 0 || h.peerInc == 0:
+		take = true
+	case m.Inc == h.peerInc:
+		take = m.Seq > h.peerSeq
+	case m.Inc > h.peerInc:
+		take = true
+	default:
+		take = now.Sub(h.last) >= staleWindow
+	}
+	if !take {
 		h.stale++
 		return false
 	}
 	h.peerInc, h.peerSeq = m.Inc, m.Seq
-	now := time.Now()
 	h.pathLast[path], h.last, h.peer = now, now, m
 	return true
 }
@@ -429,4 +451,21 @@ func (h *Heartbeat) staleCount() uint64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.stale
+}
+
+// nextIncarnation returns the incarnation of this run of the daemon: the current time, but always above the one of the previous run
+// (kept in the state directory), so that a clock set back between two runs cannot make it go down. If the file cannot be written the
+// time alone is used, and the peer's staleWindow rule still lets the new run through.
+func nextIncarnation(dir string) int64 {
+	n := time.Now().UnixNano()
+	p := filepath.Join(dir, "incarnation")
+	if b, err := os.ReadFile(p); err == nil {
+		if prev, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil && prev >= n {
+			n = prev + 1
+		}
+	}
+	if err := fsWrite(p, []byte(strconv.FormatInt(n, 10)), 0o600); err != nil {
+		log.Printf("incarnation not saved (%v): the order of the heartbeats after a restart relies on the clock", err)
+	}
+	return n
 }

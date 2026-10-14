@@ -32,13 +32,13 @@ func (d *Daemon) enforceLoop() {
 			continue
 		}
 		d.enforceOnce()
-		if tick%5 == 0 {
-			d.enforceServices()
-		}
 		if tick%10 == 3 {
 			d.prepareDevices()
 		}
 		d.ops.mu.Unlock()
+		if tick%5 == 0 {
+			d.enforceServices() // outside the lock, see enforceServices
+		}
 	}
 }
 
@@ -86,7 +86,9 @@ func (d *Daemon) enforceOnce() {
 
 // enforceServices: IPsec, gateway monitoring and VPN daemons must not run on a standby. OPNsense starts them
 // at boot from the (replicated) config, so check periodically and stop anything that slipped in.
-func (d *Daemon) enforceServices() {
+// standbyServicesRunning lists the HA services that run although this node is standby (the boot sequence starts them). Fast
+// commands only, run without the operations lock.
+func standbyServicesRunning() []string {
 	var running []string
 	for _, p := range []string{"charon", "dpinger", "openvpn"} {
 		if _, err := sh("pgrep", "-x", p); err == nil {
@@ -96,7 +98,18 @@ func (d *Daemon) enforceServices() {
 	if out, err := sh("wg", "show", "interfaces"); err == nil && strings.TrimSpace(out) != "" {
 		running = append(running, "wireguard") // a standby must not complete handshakes with the peers of the shared key
 	}
-	if len(running) == 0 {
+	return running
+}
+
+// enforceServices stops them. The check runs without the operations lock (an automatic takeover must not wait for it); the stop
+// takes the lock and checks again that the node is still standby, so that it never stops what a promotion has just started.
+func (d *Daemon) enforceServices() {
+	running := standbyServicesRunning()
+	if len(running) == 0 || !d.ops.mu.TryLock() {
+		return
+	}
+	defer d.ops.mu.Unlock()
+	if d.store.Get().State != StateStandby {
 		return
 	}
 	for _, c := range haStop {

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -90,19 +91,57 @@ type Daemon struct {
 	hwOnce        sync.Once
 	hwv           *hwMacs       // permanent MAC addresses of the warm devices
 	rs            rulesetMirror // the ruleset of the active node as a hot standby holds it (see ruleset.go)
+	runIntent     string        // second copy of the transition record (intent.go); "" = runIntentPath
+	cfgProblem    string        // the settings file could not be read in full (loadConfigChecked): what is used instead
+	pkgr          pkgRun        // the plugin installation in progress (packages.go)
+	maintExpiring atomic.Bool   // the end of the maintenance mode is being written (maintenance.go)
 }
 
 func loadConfig() Config {
-	c := Config{ListenPort: 7690}
+	c, _ := loadConfigChecked()
+	return c
+}
+
+// goodConfigPath keeps a copy of the last settings file that could be read in full.
+func goodConfigPath() string { return filepath.Join(stateDir(), "hasyncd.json.good") }
+
+// loadConfigChecked reads the daemon settings. A file that is not valid JSON is never half used: decoding stops at the error, and the
+// fields after it (fence_required, auto_failover, the detection time, ...) would silently take their default values. Instead the last
+// settings that could be read in full are used; if there are none, the daemon runs with automatic failover off and fencing required
+// (it serves as it is, but takes no decision of its own) until the file is fixed. problem says which, for the events and the
+// pre-flight ("" when the file was fine).
+func loadConfigChecked() (Config, string) {
 	path := os.Getenv("HASYNC_CONF")
 	if path == "" {
 		path = "/usr/local/etc/hasyncd.json"
 	}
+	c := Config{ListenPort: 7690}
+	problem := ""
 	if b, err := os.ReadFile(path); err == nil {
 		os.Chmod(path, 0o600) // webhook URL and kit token live here
-		if err := json.Unmarshal(b, &c); err != nil {
-			// never run silently on half a configuration
-			log.Printf("ERROR: %s is not valid JSON (%v): using defaults for what could not be read; fix the plugin settings", path, err)
+		var parsed Config
+		if err := json.Unmarshal(b, &parsed); err == nil {
+			c = parsed
+			if c.ListenPort == 0 {
+				c.ListenPort = 7690
+			}
+			if old, _ := os.ReadFile(goodConfigPath()); string(old) != string(b) {
+				if werr := fsWrite(goodConfigPath(), b, 0o600); werr != nil {
+					log.Printf("settings: the copy of the last valid settings was not saved: %v", werr)
+				}
+			}
+		} else {
+			problem = fmt.Sprintf("%s is not valid (%v)", path, err)
+			var good Config
+			if gb, gerr := os.ReadFile(goodConfigPath()); gerr == nil && json.Unmarshal(gb, &good) == nil {
+				c = good
+				problem += ": the last valid settings are used until it is fixed"
+			} else {
+				off := false
+				c.AutoFailover, c.FenceRequired = &off, true
+				problem += " and no earlier valid settings exist: automatic failover is OFF until the settings are saved again"
+			}
+			log.Printf("ERROR: %s", problem)
 		}
 	}
 	if c.ListenPort < 1024 || c.ListenPort > 65535 {
@@ -121,7 +160,7 @@ func loadConfig() Config {
 			*dev = ""
 		}
 	}
-	return c
+	return c, problem
 }
 
 // haIPv4 returns the first IPv4 address of the HA device; the peer listener binds to it only,
@@ -145,13 +184,15 @@ func runDaemon() error {
 	if err != nil {
 		return err
 	}
-	cert, err := loadOrCreateCert(st.dir)
+	cert, identityReplaced, err := loadIdentity(st.dir)
 	if err != nil {
 		return err
 	}
-	d := &Daemon{cfg: loadConfig(), store: st, cert: cert, fp: fingerprint(cert.Certificate[0]), pairing: &Pairing{}, ops: &Ops{}, hb: newHeartbeat(), auto: &autoState{}, sync: &syncCtl{wake: make(chan struct{}, 1)}, sess: newSessionSync()}
+	cfg, cfgProblem := loadConfigChecked()
+	d := &Daemon{cfg: cfg, cfgProblem: cfgProblem, store: st, cert: cert, fp: fingerprint(cert.Certificate[0]), pairing: &Pairing{}, ops: &Ops{}, hb: newHeartbeat(), auto: &autoState{}, sync: &syncCtl{wake: make(chan struct{}, 1)}, sess: newSessionSync()}
 	setDetection(d.cfg.DetectTime)
 	d.health, d.drift, d.leases, d.upd = newHealthState(), &driftState{}, &leaseState{}, &updateRun{}
+	d.hb.inc = nextIncarnation(st.dir) // increasing across restarts, whatever the clock does
 	d.ev = openEvents(st.dir)
 	d.ev.sink = d.notify
 	d.hist = openHistory(st.dir)
@@ -163,8 +204,17 @@ func runDaemon() error {
 	}
 	d.event("info", "hasyncd %s started (role %s, state %s%s)", version, st.Get().Role, st.Get().State, map[bool]string{true: ", STATE FILES WERE UNREADABLE", false: ""}[st.Get().Corrupt])
 
+	if d.cfgProblem != "" {
+		d.event("error", "plugin settings: %s", d.cfgProblem)
+	}
 	// a promotion or demotion that the last run of the daemon did not finish (intent.go): back to standby before anything acts on the role
 	d.recoverTransition()
+	if identityReplaced && st.Get().PeerFP != "" {
+		// the identity the peer pinned is lost: the peer can no longer hear this node, and would take this node for dead. A node that
+		// cannot prove who it is must not keep the shared identity: standby until the pair is formed again
+		d.event("error", "the TLS identity of this node was damaged and replaced: the peer will refuse it. This node goes to STANDBY; break the pair and pair again")
+		d.toSafeStandby("replaced TLS identity", true)
+	}
 
 	listen := os.Getenv("HASYNC_LISTEN") // dev/test override, e.g. 127.0.0.1:7690
 	if listen == "" {

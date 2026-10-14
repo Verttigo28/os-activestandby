@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,9 +19,11 @@ import (
 
 func newHANode(t *testing.T, st State) *Daemon {
 	t.Helper()
+	dir := t.TempDir()
 	return &Daemon{
-		store: &Store{dir: t.TempDir(), data: st},
+		store: &Store{dir: dir, data: st},
 		ops:   &Ops{}, hb: newHeartbeat(), auto: &autoState{}, act: &actions{},
+		runIntent: filepath.Join(dir, "run.transition"), // each test node has its own second copy of the transition record
 	}
 }
 

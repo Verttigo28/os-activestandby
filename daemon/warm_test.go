@@ -605,6 +605,7 @@ func TestUnknownHardwareMACFallsBackToClassicDown(t *testing.T) {
 
 func TestConfigRejectsUnknownMode(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HASYNC_DIR", dir) // the copy of the last valid settings goes there
 	for in, want := range map[string]string{`{"ha_mode":"warm"}`: "warm", `{"ha_mode":"turbo"}`: "classic", `{}`: "classic"} {
 		p := filepath.Join(dir, "c.json")
 		os.WriteFile(p, []byte(in), 0o600)

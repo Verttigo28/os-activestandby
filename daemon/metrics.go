@@ -38,7 +38,7 @@ func (d *Daemon) metricsText() string {
 		g("activestandby_heartbeat_rtt_seconds", "Last heartbeat round-trip time per path.", fmt.Sprintf("%.6f", d.hb.RTT(p).Seconds()), fmt.Sprintf(`path="%s"`, p))
 	}
 	g("activestandby_heartbeats_out_of_order_total", "Heartbeats of the peer that arrived after a newer one (ignored).", d.hb.staleCount())
-	rec, recErr := readIntent(d.store.dir)
+	rec, recErr := readIntent(d.store.dir, d.runIntentFile())
 	g("activestandby_transition_unfinished", "1 when a role transition is recorded as started and not finished (intent.go).", bi(rec != nil || recErr != nil))
 	sync := d.syncStatus(st)
 	g("activestandby_sync_revision", "Current config sync revision.", st.SyncRev)

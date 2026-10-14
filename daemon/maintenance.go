@@ -19,7 +19,12 @@ func (d *Daemon) maintenanceOn() bool {
 	}
 	if st.MaintenanceUntil != "" {
 		if t, err := time.Parse(time.RFC3339, st.MaintenanceUntil); err == nil && time.Now().After(t) {
-			go d.setMaintenance(false, 0, true)
+			if d.maintExpiring.CompareAndSwap(false, true) { // once, not at every call until the store changed
+				go func() {
+					defer d.maintExpiring.Store(false)
+					d.setMaintenance(false, 0, true)
+				}()
+			}
 			return false
 		}
 	}

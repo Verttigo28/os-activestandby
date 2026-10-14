@@ -39,40 +39,67 @@ type transitionIntent struct {
 
 func intentPath(dir string) string { return filepath.Join(dir, "transition.json") }
 
-// beginIntent records that a transition starts. A record that cannot be written does not stop the transition (an active node that
-// died must still be replaced when the disk of the standby is full); the failure is reported, and a reboot still ends as standby.
-func (d *Daemon) beginIntent(op, reason string) {
-	st := d.store.Get()
-	b, _ := json.Marshal(transitionIntent{Op: op, EpochBefore: st.Epoch, StateBefore: st.State, Reason: reason, Started: time.Now().UTC().Format(time.RFC3339Nano)})
-	if err := fsWrite(intentPath(d.store.dir), b, 0o600); err != nil {
-		d.event("error", "the start of the %s could not be recorded (%v): if this daemon stops before it ends, a restart cannot detect it (a reboot still comes back as standby)", op, err)
+// runIntentPath is the second copy of the record. The record only has to survive a restart of the daemon (a reboot always ends as
+// standby), so /var/run, which is not the file system of /conf, is enough: a full or failing /conf does not lose it.
+const runIntentPath = "/var/run/activestandby.transition"
+
+// runIntentFile is the second copy for this daemon (the tests give each node its own).
+func (d *Daemon) runIntentFile() string {
+	if d.runIntent != "" {
+		return d.runIntent
 	}
+	return runIntentPath
 }
 
-// endIntent removes the record once the transition reached its commit point.
+// beginIntent records that a transition starts, in the state directory and in /var/run. It fails only if neither copy can be written:
+// the caller decides (a promotion is then refused: a takeover that could not be recognised after a crash is not started; a
+// demotion goes on, standing down is the safe direction).
+func (d *Daemon) beginIntent(op, reason string) error {
+	st := d.store.Get()
+	b, _ := json.Marshal(transitionIntent{Op: op, EpochBefore: st.Epoch, StateBefore: st.State, Reason: reason, Started: time.Now().UTC().Format(time.RFC3339Nano)})
+	err1 := fsWrite(intentPath(d.store.dir), b, 0o600)
+	err2 := fsWrite(d.runIntentFile(), b, 0o600)
+	switch {
+	case err1 != nil && err2 != nil:
+		d.event("error", "the start of the %s could not be recorded anywhere (%v; %v)", op, err1, err2)
+		return fmt.Errorf("transition record not written: %v; %v", err1, err2)
+	case err1 != nil:
+		d.event("warning", "the start of the %s is recorded in %s only: the state directory refuses it (%v)", op, d.runIntentFile(), err1)
+	}
+	return nil
+}
+
+// endIntent removes both copies of the record once the transition reached its commit point.
 func (d *Daemon) endIntent() {
-	if err := os.Remove(intentPath(d.store.dir)); err != nil && !os.IsNotExist(err) {
-		log.Printf("transition record not removed: %v", err)
-		return
+	for _, p := range []string{intentPath(d.store.dir), d.runIntentFile()} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			log.Printf("transition record %s not removed: %v", p, err)
+		}
 	}
 	syncDir(d.store.dir)
 }
 
-// readIntent returns nil, nil when there is no record. A record that cannot be read is an error: the caller treats it as an
-// interrupted transition of unknown kind.
-func readIntent(dir string) (*transitionIntent, error) {
-	b, err := os.ReadFile(intentPath(dir))
-	if os.IsNotExist(err) {
-		return nil, nil
+// readIntent returns the record (the copy in the state directory, else the one in /var/run), or nil, nil when there is none. A record
+// that cannot be read is an error: the caller treats it as an interrupted transition of unknown kind.
+func readIntent(dir, runFile string) (*transitionIntent, error) {
+	var firstErr error
+	for _, p := range []string{intentPath(dir), runFile} {
+		b, err := os.ReadFile(p)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err == nil {
+			var in transitionIntent
+			if err = json.Unmarshal(b, &in); err == nil && (in.Op == intentPromote || in.Op == intentDemote) {
+				return &in, nil
+			}
+			err = fmt.Errorf("unreadable transition record %s (%v)", p, err)
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
-	if err != nil {
-		return nil, err
-	}
-	var in transitionIntent
-	if err := json.Unmarshal(b, &in); err != nil || (in.Op != intentPromote && in.Op != intentDemote) {
-		return nil, fmt.Errorf("unreadable transition record (%v)", err)
-	}
-	return &in, nil
+	return nil, firstErr
 }
 
 // committed: the transition reached its commit point and only the removal of the record is missing. Only a promotion can be in that
@@ -84,7 +111,7 @@ func (in transitionIntent) committed(st State) bool {
 
 // recoverTransition runs once at the start of the daemon, before the loops that act on the role.
 func (d *Daemon) recoverTransition() {
-	in, err := readIntent(d.store.dir)
+	in, err := readIntent(d.store.dir, d.runIntentFile())
 	if in == nil && err == nil {
 		return
 	}
@@ -105,32 +132,47 @@ func (d *Daemon) recoverTransition() {
 		return
 	}
 	d.event("error", "%s did not finish (the daemon stopped in the middle): this node goes to STANDBY; the peer or the election decides who serves", what)
+	if d.toSafeStandby("recovery of the interrupted transition", false) {
+		d.endIntent()
+	} else {
+		d.event("error", "recovery of the interrupted transition incomplete: the record is kept and the recovery runs again at the next start")
+	}
+}
+
+// toSafeStandby brings the node to the state that is always safe, whatever it was: HA services stopped, the standby view of the
+// configuration written, the role standby (in memory even if the disk refuses), the data devices down, the standby ruleset. It reports
+// whether everything, including the save of the role, succeeded. saveActive: the node may be active with config.xml as the only copy
+// of its current configuration, which is saved as active.xml first (as a demotion does).
+func (d *Daemon) toSafeStandby(why string, saveActive bool) bool {
 	d.ops.mu.Lock()
 	defer d.ops.mu.Unlock()
 	for _, c := range haStop {
 		d.run(c[0], c[1:]...)
 	}
 	full := activeXML(d.store.dir)
+	if saveActive && d.store.Get().State == StateActive {
+		if err := copyFile(configPath(), full, 0o600); err != nil {
+			d.event("error", "%s: the configuration in use could not be saved (%v)", why, err)
+		}
+	}
 	viewOK := false
 	if activeValid(d.store.dir) {
 		if err := d.doStandbyView(full); err != nil {
-			d.event("error", "recovery of the interrupted transition: the standby view could not be written (%v); the record is kept and the recovery runs again at the next start", err)
+			d.event("error", "%s: the standby view could not be written (%v)", why, err)
 		} else {
 			viewOK = true
 		}
 	} else {
-		d.event("error", "recovery of the interrupted transition: no valid saved configuration (active.xml); the devices are kept down from the configuration in use, a full resync from the active node is needed")
+		d.event("error", "%s: no valid saved configuration (active.xml); the devices are kept down from the configuration in use, a full resync from the active node is needed", why)
 	}
 	saveErr := d.store.UpdateSafe(func(s *State) { s.State = StateStandby })
 	if saveErr != nil {
-		d.event("error", "recovery of the interrupted transition: the standby role could not be saved (%v); the record is kept and the recovery runs again at the next start", saveErr)
+		d.event("error", "%s: the standby role could not be saved (%v)", why, saveErr)
 	}
 	d.ops.cache, d.ops.mtime = IfaceSet{}, time.Time{}
 	d.enforceOnce()
 	d.run("configctl", "filter", "reload")
-	if saveErr == nil && viewOK { // the recovery is over only when the disk agrees and the standby view is in place
-		d.endIntent()
-	}
+	return saveErr == nil && viewOK
 }
 
 // doStandbyView writes the standby view of the configuration (a seam for the tests).

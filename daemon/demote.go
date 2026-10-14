@@ -50,7 +50,7 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) (retErr error) {
 	}
 	// the configuration is saved; the machine changes from here on (intent.go): a daemon that stops before the end is detected at
 	// its restart, and the steps after the devices went down are redone there
-	d.beginIntent(intentDemote, reason)
+	d.beginIntent(intentDemote, reason) // a failure is reported; standing down goes on (it is the safe direction)
 	devicesDown := false
 	defer func() {
 		// Once the data interfaces are down this node does not serve, whatever failed afterwards (stopping a service, writing the

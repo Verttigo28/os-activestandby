@@ -107,10 +107,10 @@ func (d *Daemon) ctlStatus(w http.ResponseWriter, r *http.Request) {
 		"os_version": d.localVer, "maintenance": d.maintenanceOn(), "maintenance_until": st.MaintenanceUntil, "maintenance_until_local": localStamp(st.MaintenanceUntil), "tz": serverZone(),
 		"health": d.healthReason(), "degraded": d.degradedReason(), "pfsync_problem": d.pfsyncStatus(), "package_diff": d.packageReport(), "warm": d.warmInfo(), "ruleset_mirror": d.rulesetStatus(), "failover_in_progress": d.failing.Load(), "drift": d.driftReason(), "fencing": d.cfg.FenceCommand != "", "preempt": d.cfg.Preempt,
 	}
-	if rec, err := readIntent(d.store.dir); rec != nil || err != nil {
+	if rec, err := readIntent(d.store.dir, d.runIntentFile()); rec != nil || err != nil {
 		out["transition_unfinished"] = true // a promotion or demotion is recorded as started and not finished (intent.go)
 	}
-	out["protocol"], out["fence_required"] = protoVersion, d.cfg.FenceRequired
+	out["protocol"], out["fence_required"], out["settings_problem"] = protoVersion, d.cfg.FenceRequired, d.cfgProblem
 	if st.Kit != nil {
 		out["kit"] = map[string]string{"peer": st.Kit.Peer, "expires": st.Kit.Expires, "error": st.Kit.Error}
 	}

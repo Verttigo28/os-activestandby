@@ -35,3 +35,21 @@ func TestTimesInTheZoneOfTheFirewall(t *testing.T) {
 		t.Fatalf("the local time is added when read, never stored: %+v / %+v", r[0], ev.list[0])
 	}
 }
+
+// a deadline keeps the monotonic reading of the clock: a step of the wall clock (this daemon steps the clock of a standby) does not
+// stretch or shorten it
+func TestStoredTimesKeepTheMonotonicClock(t *testing.T) {
+	var a atomicTime
+	now := time.Now()
+	a.Set(now.Add(45 * time.Second))
+	if got := a.Get(); !got.Equal(now.Add(45*time.Second)) || got.Round(0) == got {
+		t.Fatalf("%v: the monotonic reading is lost", got)
+	}
+	if !a.Get().After(now) {
+		t.Fatal("order")
+	}
+	a.Set(time.Time{})
+	if !a.Get().IsZero() {
+		t.Fatal("unset")
+	}
+}

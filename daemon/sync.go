@@ -322,6 +322,14 @@ func (d *Daemon) revisionsSince(since string) int {
 // pinMACs runs the helper that writes the live MAC of every enabled data interface into <spoofmac> if missing.
 // Returns true when it changed config.xml.
 func (d *Daemon) pinMACs() bool {
+	// under the operations lock and never on a standby: it rewrites config.xml and reconfigures interfaces, which must not cross a
+	// demotion (it would bring a shared interface back up and announce it from a node that is going standby). A node that is not
+	// paired yet (the kit is made from it) pins its MACs too.
+	d.ops.mu.Lock()
+	defer d.ops.mu.Unlock()
+	if d.store.Get().State == StateStandby {
+		return false
+	}
 	out, err := sh(spoofScript)
 	if err != nil {
 		log.Printf("sync: pinning MACs failed: %v: %s", err, out)
@@ -339,6 +347,7 @@ var pinnedKey = regexp.MustCompile(`(\w+)\([^)]*\)=`)
 
 // applyPinned makes a freshly written virtual MAC take effect on this (running, active) node: the interface is
 // reconfigured (about a second of interruption on it) and the network is told with a gratuitous ARP.
+// applyPinned runs with the operations lock held (pinMACs).
 func (d *Daemon) applyPinned(out string) {
 	var wg sync.WaitGroup
 	for _, m := range pinnedKey.FindAllStringSubmatch(out, -1) {

@@ -33,6 +33,7 @@ func bootStandby() error {
 	}
 	// a transition that was running when the machine went down is over: the node is standby again (intent.go)
 	os.Remove(intentPath(st.dir))
+	os.Remove(runIntentPath)
 	return nil
 }
 

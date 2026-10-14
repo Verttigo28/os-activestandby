@@ -80,8 +80,9 @@ func (d *Daemon) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		src.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
 		log.Printf("proxy: CONNECT %s", r.Host)
-		go func() { io.Copy(dst, src); dst.Close() }()
-		go func() { io.Copy(src, dst); src.Close() }()
+		// a tunnel that carries nothing for 10 minutes is closed: half-open connections must not pile up (each holds two goroutines)
+		go func() { copyIdle(dst, src, 10*time.Minute); dst.Close(); src.Close() }()
+		go func() { copyIdle(src, dst, 10*time.Minute); src.Close(); dst.Close() }()
 		return
 	}
 	// plain http absolute-URI request
@@ -92,7 +93,7 @@ func (d *Daemon) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	r.RequestURI = ""
 	r.Header.Del("Proxy-Connection")
-	resp, err := (&http.Transport{ResponseHeaderTimeout: 30 * time.Second}).RoundTrip(r)
+	resp, err := proxyTransport.RoundTrip(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -113,4 +114,25 @@ func (d *Daemon) proxyListener(haIP string) {
 	srv := &http.Server{Addr: addr, Handler: http.HandlerFunc(d.proxyHandler), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Printf("update proxy for the standby listening on %s", addr)
 	log.Printf("update proxy ended: %v", srv.ListenAndServe())
+}
+
+// one transport for every plain HTTP request of the proxy, with idle connections closed: a transport per request kept every idle
+// connection (and its goroutines) for ever
+var proxyTransport = &http.Transport{ResponseHeaderTimeout: 30 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 16}
+
+// copyIdle copies src to dst until EOF, an error, or idle without any byte read for that long.
+func copyIdle(dst io.Writer, src net.Conn, idle time.Duration) {
+	buf := make([]byte, 32<<10)
+	for {
+		src.SetReadDeadline(time.Now().Add(idle))
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }

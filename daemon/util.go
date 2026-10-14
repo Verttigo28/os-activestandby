@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -26,8 +25,11 @@ func osStat(path string) (time.Time, error) {
 func peerHostPort(st State, port int) string { return net.JoinHostPort(st.PeerAddr, fmt.Sprint(port)) }
 
 // execShell runs a fixed script through /bin/sh (never with operator input).
-func execShell(script string) (string, error) {
-	out, err := boundedCmd(true, "/bin/sh", "-c", script)
+func execShell(script string) (string, error) { return execShellFor(cmdTimeout, script) }
+
+// execShellFor is execShell with its own time limit (the long operations).
+func execShellFor(limit time.Duration, script string) (string, error) {
+	out, err := boundedCmdFor(limit, true, "/bin/sh", "-c", script)
 	return string(out), err
 }
 
@@ -72,23 +74,24 @@ func writeMarker(st State, flags []string) {
 	os.WriteFile(roleMarker, []byte(v), 0o644)
 }
 
-// atomicTime is a time stamp that goroutines can read and write without a lock (zero value = unset).
-type atomicTime struct{ v atomic.Int64 }
+// atomicTime is a time stamp that goroutines can read and write safely (zero value = unset). It keeps the monotonic reading of the
+// time it is given: a deadline set with time.Now().Add(...) stays that long even when the wall clock is stepped (this daemon steps
+// the clock of a standby to follow the active node, clock.go), and time.Since of a stored time never goes negative.
+type atomicTime struct {
+	mu sync.Mutex
+	t  time.Time
+}
 
 func (a *atomicTime) Set(t time.Time) {
-	if t.IsZero() {
-		a.v.Store(0)
-		return
-	}
-	a.v.Store(t.UnixNano())
+	a.mu.Lock()
+	a.t = t
+	a.mu.Unlock()
 }
 
 func (a *atomicTime) Get() time.Time {
-	n := a.v.Load()
-	if n == 0 {
-		return time.Time{}
-	}
-	return time.Unix(0, n)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.t
 }
 
 // hostName is this node's name as the GUI shows it.

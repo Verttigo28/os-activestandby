@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -70,16 +73,31 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 	st := d.store.Get()
 	proxy := "http://" + net.JoinHostPort(st.PeerAddr, fmt.Sprint(proxyPort(d.cfg)))
 	d.event("info", "installing %d plugin(s) replicated from the active node: %s", len(install), strings.Join(install, ", "))
-	cmd := exec.Command("pkg", append([]string{"install", "-y", "--"}, install...)...)
-	cmd.Env = append(os.Environ(), "HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy, "ASSUME_ALWAYS_YES=yes")
+	// The installation can take minutes. A promotion of this node must not run next to it (a plugin's install scripts restart
+	// configd and reconfigure plugins, which collides with the takeover): stopPackageInstall cancels it, and the whole process group
+	// of pkg goes (ownGroup).
+	if d.store.Get().State != StateStandby {
+		return errors.New("not installing plugins: this node is no longer standby")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pkgInstallTimeout)
 	done := make(chan struct{})
-	var out []byte
-	var err error
-	go func() { out, err = cmd.CombinedOutput(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(8 * time.Minute):
-		cmd.Process.Kill()
+	d.pkgr.mu.Lock()
+	d.pkgr.cancel, d.pkgr.done = cancel, done
+	d.pkgr.mu.Unlock()
+	defer func() {
+		cancel()
+		d.pkgr.mu.Lock()
+		d.pkgr.cancel, d.pkgr.done = nil, nil
+		d.pkgr.mu.Unlock()
+		close(done)
+	}()
+	env := append(os.Environ(), "HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy, "ASSUME_ALWAYS_YES=yes")
+	out, err := pkgInstall(ctx, env, install)
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled):
+		d.event("warning", "plugin installation interrupted: this node is taking over (%s); it is installed again by the next sync", strings.Join(install, ", "))
+		return fmt.Errorf("package install interrupted by a takeover: %s", strings.Join(install, ", "))
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return fmt.Errorf("package install timed out: %s", strings.Join(install, ", "))
 	}
 	if err != nil {
@@ -153,4 +171,41 @@ func (d *Daemon) setPkgReport(want, have map[string]string) {
 func (d *Daemon) packageReport() string {
 	s, _ := d.pkgReport.Load().(string)
 	return s
+}
+
+// pkgInstallTimeout bounds one installation of replicated plugins.
+var pkgInstallTimeout = 8 * time.Minute
+
+// pkgInstall runs pkg install (a variable for the tests).
+var pkgInstall = func(ctx context.Context, env, names []string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "pkg", append([]string{"install", "-y", "--"}, names...)...)
+	cmd.Env = env
+	ownGroup(cmd)
+	cmd.WaitDelay = 10 * time.Second
+	return cmd.CombinedOutput()
+}
+
+// pkgRun is the plugin installation in progress, if any.
+type pkgRun struct {
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// stopPackageInstall cancels a plugin installation in progress and waits (bounded) until it is over. Called at the start of a
+// promotion.
+func (d *Daemon) stopPackageInstall() {
+	d.pkgr.mu.Lock()
+	cancel, done := d.pkgr.cancel, d.pkgr.done
+	d.pkgr.mu.Unlock()
+	if cancel == nil {
+		return
+	}
+	d.event("warning", "a plugin installation is running: stopping it before the takeover")
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		d.event("error", "the plugin installation did not stop within 15 s: the takeover goes on")
+	}
 }

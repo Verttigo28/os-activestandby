@@ -43,6 +43,27 @@ cat > "$META/+POST_INSTALL" <<'EOF'
 /usr/local/etc/rc.configure_plugins POST_INSTALL >/dev/null 2>&1 || true
 rm -f /tmp/opnsense_menu_cache.xml /tmp/opnsense_acl_cache.json
 /usr/sbin/service configd restart >/dev/null 2>&1 || true
+# An upgrade: pkg does not run the deinstall scripts of the old version, so the daemon that runs is still the old binary. It is
+# restarted, inside a maintenance window: the peer must not take the second of silence for a failure (with a short detection time it
+# would take over while this node still serves). A maintenance mode that was already on (guided upgrade) is left as it is.
+if /usr/local/etc/rc.d/hasyncd onestatus >/dev/null 2>&1; then
+    was=$(/usr/local/sbin/hasyncd ctl status 2>/dev/null | grep -o '"maintenance":[a-z]*' | head -n 1)
+    /usr/local/sbin/hasyncd ctl maintenance on --hours 1 >/dev/null 2>&1 || true
+    /usr/local/etc/rc.d/hasyncd onerestart >/dev/null 2>&1 || true
+    if [ "$was" = '"maintenance":false' ]; then
+        (
+            i=0
+            while [ $i -lt 60 ]; do
+                sleep 2; i=$((i + 2))
+                if /usr/local/sbin/hasyncd ctl status 2>/dev/null | grep -q '"daemon":"up"'; then
+                    sleep 10 # the restarted daemon hears its peer again before automatic failover resumes
+                    /usr/local/sbin/hasyncd ctl maintenance off >/dev/null 2>&1
+                    break
+                fi
+            done
+        ) </dev/null >/dev/null 2>&1 &
+    fi
+fi
 EOF
 cat > "$META/+PRE_DEINSTALL" <<'EOF'
 if [ -f /conf/activestandby/state.json ] && grep -q '"role": "\(master\|standby\)"' /conf/activestandby/state.json; then

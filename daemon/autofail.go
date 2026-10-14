@@ -20,11 +20,12 @@ import (
 // (tie: the master role) and the loser demotes itself immediately.
 
 const (
-	electionMaster    = 5 * time.Second  // both standby, peer alive: master takes over after this
-	electionSecondary = 30 * time.Second // ... the secondary only if the master did not
-	bootWaitMaster    = 10 * time.Second // peer never seen since daemon start
-	bootWaitSecondary = 30 * time.Second
-	minHold           = 10 * time.Second // minimum time between automatic role changes
+	electionMaster        = 5 * time.Second  // both standby, peer alive: master takes over after this
+	electionSecondary     = 30 * time.Second // ... the secondary only if the master did not
+	electionInMaintenance = 2 * time.Minute  // added to both while maintenance mode is on
+	bootWaitMaster        = 10 * time.Second // peer never seen since daemon start
+	bootWaitSecondary     = 30 * time.Second
+	minHold               = 10 * time.Second // minimum time between automatic role changes
 )
 
 type autoState struct {
@@ -120,7 +121,10 @@ func (d *Daemon) autoStep() {
 
 	switch st.State {
 	case StateStandby:
-		if maint {
+		// Maintenance pauses the takeovers (after a silence of the peer, preemption, health). It does not pause the election of a pair
+		// in which both nodes answer and nobody is active (a failed hand-over of the guided upgrade, for example): that is not a
+		// failover, nobody serves at all. It only waits longer, to leave room for what the operator is doing.
+		if maint && (!alive || peer.State == StateActive) {
 			d.auto.noActiveSince, d.auto.peerActiveSince = time.Time{}, time.Time{}
 			d.auto.setBlocked("")
 			return
@@ -153,6 +157,9 @@ func (d *Daemon) autoStep() {
 			wait := electionSecondary
 			if st.Role == RoleMaster {
 				wait = electionMaster
+			}
+			if maint {
+				wait += electionInMaintenance // added, not a maximum: the master still goes first
 			}
 			if time.Now().Before(d.auto.holdUntil.Get()) {
 				return // the peer cancelled a hand-over and is taking its role back: do not race it

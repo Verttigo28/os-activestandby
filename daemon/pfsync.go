@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +35,7 @@ func (d *Daemon) pfsyncApplyLocked() {
 		d.pfsyncProblem.Store("")
 		return
 	}
-	out, err := exec.Command("ifconfig", "pfsync0", "syncdev", d.cfg.HADevice, "syncpeer", st.PeerAddr, "maxupd", "128", "up").CombinedOutput()
+	out, err := boundedCmd(true, "ifconfig", "pfsync0", "syncdev", d.cfg.HADevice, "syncpeer", st.PeerAddr, "maxupd", "128", "up")
 	if err != nil {
 		log.Printf("pfsync: setup failed: %v: %s", err, out)
 		d.setPfsyncProblem(fmt.Sprintf("pfsync setup failed: %v: %s", err, strings.TrimSpace(string(out))))
@@ -47,7 +46,7 @@ func (d *Daemon) pfsyncApplyLocked() {
 }
 
 func (d *Daemon) pfsyncTeardownLocked() {
-	if out, err := exec.Command("ifconfig", "pfsync0", "-syncdev", "-syncpeer", "down").CombinedOutput(); err != nil {
+	if out, err := boundedCmd(true, "ifconfig", "pfsync0", "-syncdev", "-syncpeer", "down"); err != nil {
 		log.Printf("pfsync: teardown: %v: %s", err, out)
 	}
 }

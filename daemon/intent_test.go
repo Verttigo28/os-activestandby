@@ -71,8 +71,12 @@ func nodeOnDisk(t *testing.T, st State, in *transitionIntent, rawIntent string) 
 }
 
 func recordExists(d *Daemon) bool {
-	_, err := os.Stat(intentPath(d.store.dir))
-	return err == nil
+	for _, p := range []string{intentPath(d.store.dir), d.runIntentFile()} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func stateOnDisk(t *testing.T, d *Daemon) State {
@@ -227,5 +231,56 @@ func TestCommitOfATakeoverAndTheRecord(t *testing.T) {
 	}
 	if !strings.Contains(d.degradedReason(), "back to standby") {
 		t.Fatalf("not shown: %q", d.degradedReason())
+	}
+}
+
+// /conf refuses the record (full, failing): the copy in /var/run is enough to recognise the interrupted transition at the restart
+func TestRecordSurvivesAFailingStateDirectory(t *testing.T) {
+	d := nodeOnDisk(t, activeState(RoleMaster, 7), nil, "")
+	failDisk(t, errors.New("no space left on device"), "transition.json")
+	if err := d.beginIntent(intentDemote, "test"); err != nil {
+		t.Fatalf("one copy is enough: %v", err)
+	}
+	if _, err := os.Stat(intentPath(d.store.dir)); err == nil {
+		t.Fatal("the state directory was supposed to refuse")
+	}
+	in, err := readIntent(d.store.dir, d.runIntentFile())
+	if err != nil || in == nil || in.Op != intentDemote {
+		t.Fatalf("the second copy must be read: %+v %v", in, err)
+	}
+	var r recorder
+	r.install(d, nil)
+	d.recoverTransition()
+	if d.store.Get().State != StateStandby || recordExists(d) {
+		t.Fatalf("recovered from the second copy: state %s, record left %v", d.store.Get().State, recordExists(d))
+	}
+}
+
+// neither copy can be written: a promotion is not started (nothing of the machine is touched), the failure is the answer
+func TestPromotionRefusedWhenItCannotBeRecorded(t *testing.T) {
+	d := nodeOnDisk(t, standbyState(RoleStandby, 6), nil, "")
+	d.health, d.drift, d.leases = newHealthState(), &driftState{}, &leaseState{}
+	failDisk(t, errors.New("input/output error"), "transition.json", "run.transition")
+	var r recorder
+	r.install(d, nil)
+	err := d.promote("test")
+	if err == nil || !strings.Contains(err.Error(), "could not be recorded") {
+		t.Fatalf("err = %v", err)
+	}
+	if d.store.Get().State != StateStandby || d.store.Get().Epoch != 6 {
+		t.Fatal("the node must stay as it was")
+	}
+	cfg, _ := os.ReadFile(configPath())
+	if len(cfg) != 0 {
+		t.Fatal("the full configuration must not have been put in place")
+	}
+}
+
+// a demotion goes on even if it cannot be recorded: standing down is the safe direction
+func TestDemotionIsNotBlockedByTheRecord(t *testing.T) {
+	d := nodeOnDisk(t, activeState(RoleMaster, 7), nil, "")
+	failDisk(t, errors.New("input/output error"), "transition.json", "run.transition")
+	if err := d.beginIntent(intentDemote, "test"); err == nil {
+		t.Fatal("both copies refused: the failure must be reported")
 	}
 }

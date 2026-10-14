@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -64,5 +67,60 @@ func TestLocalHeartbeatCarriesItsOrder(t *testing.T) {
 	}
 	if time.Since(time.Unix(0, a.Inc)) > time.Minute {
 		t.Fatal("the incarnation is the start of this daemon")
+	}
+}
+
+// Reported by the audit of ba21e4d: once the restarted peer has been heard, a late message of its PREVIOUS incarnation must not be
+// taken (it carries the state of before the restart).
+func TestLateMessageOfThePreviousIncarnationIsRefused(t *testing.T) {
+	h := newHeartbeat()
+	h.seen("ha", hbMsg{Inc: 1000, Seq: 900, State: StateActive})        // before the restart: active
+	h.seen("ha", hbMsg{Inc: 2000, Seq: 1, State: StateStandby})         // the restarted peer
+	if h.seen("mgmt", hbMsg{Inc: 1000, Seq: 901, State: StateActive}) { // late, over the other path
+		t.Fatal("a message of the previous incarnation was taken after the new one")
+	}
+	if _, _, p := h.Snapshot(); p.State != StateStandby || p.Inc != 2000 {
+		t.Fatalf("the peer state went back to %s (incarnation %d)", p.State, p.Inc)
+	}
+	if !h.seen("ha", hbMsg{Inc: 2000, Seq: 2, State: StateStandby}) {
+		t.Fatal("the new incarnation must keep being taken")
+	}
+}
+
+// The clock of the peer was set back and its daemon restarted without its saved counter: its new incarnation is LOWER. It is taken
+// once the previous incarnation has been silent long enough that no late message of it can still arrive, and not before.
+func TestLowerIncarnationAfterAClockSetBack(t *testing.T) {
+	h := newHeartbeat()
+	h.seen("ha", hbMsg{Inc: 5000, Seq: 10, State: StateActive})
+	if h.seen("ha", hbMsg{Inc: 3000, Seq: 1, State: StateStandby}) {
+		t.Fatal("taken while the current incarnation was heard a moment ago (it could be a late message)")
+	}
+	h.mu.Lock()
+	h.last = time.Now().Add(-staleWindow - time.Millisecond) // the previous incarnation has been silent since
+	h.mu.Unlock()
+	if !h.seen("ha", hbMsg{Inc: 3000, Seq: 1, State: StateStandby}) {
+		t.Fatal("the restarted peer must be taken once its previous run is silent")
+	}
+	if !h.seen("ha", hbMsg{Inc: 3000, Seq: 2, State: StateStandby}) {
+		t.Fatal("the new run must keep being taken")
+	}
+}
+
+// the incarnation of this daemon increases from one run to the next even when the clock went back
+func TestIncarnationIncreasesAcrossRestarts(t *testing.T) {
+	dir := t.TempDir()
+	a := nextIncarnation(dir)
+	future := time.Now().Add(24 * time.Hour).UnixNano() // the previous run had a clock one day ahead
+	os.WriteFile(filepath.Join(dir, "incarnation"), []byte(strconv.FormatInt(future, 10)), 0o600)
+	b := nextIncarnation(dir)
+	if b <= future || b <= a {
+		t.Fatalf("incarnations %d then %d after a saved %d", a, b, future)
+	}
+	if c := nextIncarnation(dir); c <= b {
+		t.Fatalf("%d after %d", c, b)
+	}
+	// a state directory that cannot be written: the clock alone, no failure
+	if nextIncarnation(filepath.Join(dir, "missing", "dir")) == 0 {
+		t.Fatal("no incarnation")
 	}
 }
