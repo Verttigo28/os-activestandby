@@ -143,3 +143,25 @@ func TestPromotionDoesNotWaitForeverForAnInstallation(t *testing.T) {
 	}
 	d.unblockPackageInstall()
 }
+
+// an automatic takeover does not start next to a software update that replaces the base system and the packages on the same node
+func TestNoAutomaticTakeoverWhileASoftwareUpdateRuns(t *testing.T) {
+	d := newHANode(t, standbyState(RoleStandby, 5))
+	d.upd = &updateRun{}
+	var promoted atomic.Int32
+	d.act.promote = func(string) error { promoted.Add(1); return nil }
+	d.upd.mu.Lock()
+	d.upd.running = true
+	d.upd.mu.Unlock()
+	d.autoPromote("test", false)
+	if promoted.Load() != 0 || !strings.Contains(d.auto.Blocked(), "software update") {
+		t.Fatalf("promoted %d, reason %q", promoted.Load(), d.auto.Blocked())
+	}
+	d.upd.mu.Lock()
+	d.upd.running = false
+	d.upd.mu.Unlock()
+	d.autoPromote("test", false)
+	if promoted.Load() != 1 {
+		t.Fatal("once the update ended the takeover goes ahead")
+	}
+}

@@ -10,7 +10,10 @@ import (
 
 // bootStandby runs from the early syshook, before interfaces are configured: a paired node must never
 // come up active on its own, otherwise a rebooting old master would collide with the promoted peer.
-func bootStandby() error {
+func bootStandby() error { return bootStandbyWith(nil) }
+
+// bootStandbyWith is bootStandby with the seams of the tests (act: the standby view).
+func bootStandbyWith(act *actions) error {
 	st, err := openStore()
 	if err != nil {
 		return err
@@ -19,7 +22,7 @@ func bootStandby() error {
 	if s.Role == RoleStandalone {
 		return nil
 	}
-	d := &Daemon{store: st, ops: &Ops{}}
+	d := &Daemon{store: st, ops: &Ops{}, act: act}
 	full := activeXML(st.dir)
 	// config.xml is the full configuration only while the node was active and no demotion had started. A demotion saves active.xml
 	// before it changes anything (and leaves its record), then writes the standby view into config.xml: copying config.xml then
@@ -35,7 +38,7 @@ func bootStandby() error {
 	if err := st.Update(func(x *State) { x.State = StateStandby }); err != nil {
 		return err
 	}
-	if err := d.writeStandbyView(full); err != nil {
+	if err := d.doStandbyView(full); err != nil {
 		return err
 	}
 	writeRoleMarker(State{PeerFP: s.PeerFP, State: StateStandby})
@@ -80,18 +83,18 @@ func markBootHandled() {
 }
 
 // firstStartOfThisBoot: no marker of this boot. The boot path either did not run or failed, or the daemon has not yet checked.
-func firstStartOfThisBoot() bool {
+func firstStartOfThisBoot() (first, known bool) {
 	bt := bootTime()
 	if bt == "" {
-		return false // unknown: no conclusion
+		return false, false // unknown: no conclusion (checkBoot says so)
 	}
 	// only right after a boot: a daemon (re)started later, by an upgrade of the plugin that predates the marker for example, is not
 	// the start of a boot, and an active node must not be taken down for that
 	if sec, err := strconv.ParseInt(bt, 10, 64); err != nil || time.Since(time.Unix(sec, 0)) > bootWindow {
-		return false
+		return false, true
 	}
 	b, err := os.ReadFile(bootMarkerPath)
-	return err != nil || strings.TrimSpace(string(b)) != bt
+	return err != nil || strings.TrimSpace(string(b)) != bt, true
 }
 
 // checkBoot runs once at the start of the daemon. A paired node that is "active" on disk at the first start of a boot did not go
@@ -99,7 +102,13 @@ func firstStartOfThisBoot() bool {
 // its own, so it goes to standby now, before anything acts on its role. Then the boot counts as checked.
 func (d *Daemon) checkBoot() {
 	st := d.store.Get()
-	if firstStartOfThisBoot() && st.PeerFP != "" && st.State == StateActive {
+	first, known := firstStartOfThisBoot()
+	if !known && st.PeerFP != "" && st.State == StateActive {
+		// kern.boottime cannot be read: whether this is the start of a boot cannot be told, and an active node must not be taken down
+		// for a restart of its daemon. The protection that remains is the standby path of the boot itself, and the boot guard.
+		d.event("warning", "the boot time of this machine cannot be read: the check that a booted node does not come up active on its own was skipped")
+	}
+	if first && st.PeerFP != "" && st.State == StateActive {
 		d.event("error", "this node starts as ACTIVE although it was just booted: the standby path of the boot did not complete. Going to STANDBY; the peer or the election decides who serves")
 		d.toSafeStandby("boot without the standby path", true)
 	}

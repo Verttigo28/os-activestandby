@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -80,6 +81,19 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) (retErr error) {
 		go func(dev string) { defer fw.Done(); d.standbyDevice(dev, warm) }(dev)
 	}
 	fw.Wait()
+	// "the commands ran" is not "the devices are down": read them back. A device that is still up, or still has an address (a driver that
+	// refuses "down", a failed alias removal), is tried once more; if it is still there the peer is NOT released: it would take over
+	// while this node can still transmit with the shared identity. The node stays as it is and the failure is the answer (a split-brain
+	// loser tries again every few seconds; the enforcer and the next attempt keep working on it).
+	if bad := d.standbyDown(set.ForceDown, warm); len(bad) > 0 {
+		for _, dev := range bad {
+			d.flush(dev)
+		}
+		if bad = d.standbyDown(set.ForceDown, warm); len(bad) > 0 {
+			d.event("error", "standing down failed: %s still up or still carrying an address after being taken down: the peer is not released", strings.Join(bad, ", "))
+			return fmt.Errorf("standing down failed: %s did not go down; this node keeps its role (the peer must not take over while it can still transmit with the shared identity)", strings.Join(bad, ", "))
+		}
+	}
 	step(t0, fmt.Sprintf("%d devices down", len(set.ForceDown)))
 	devicesDown = true
 	// The role, as soon as nothing is served any more, before the slower steps: a power loss after the standby view is written must
@@ -96,7 +110,7 @@ func (d *Daemon) demoteHook(reason string, afterDown func()) (retErr error) {
 	}
 	step(t0, "ipsec/dpinger/openvpn/wireguard stopped")
 	if saved {
-		if err := d.writeStandbyView(full); err != nil {
+		if err := d.doStandbyView(full); err != nil {
 			return err
 		}
 		step(t0, "standby view written")

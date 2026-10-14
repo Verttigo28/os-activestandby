@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -39,6 +40,8 @@ type autoState struct {
 	lastSBTry       time.Time    // last split-brain demotion attempt (retry throttle)
 	blocked         atomic.Value // string: why automatic promotion is currently held back
 	holdUntil       atomicTime   // no election of this node until then (the peer is taking its role back after an aborted hand-over)
+	probeAt         time.Time    // the last probe of the peer system and what it found (autoStep only)
+	probeAddr       string
 	detectMs        atomic.Int64 // silence of the peer when the automatic promotion was decided (for the history)
 	lastTick        time.Time    // when autoStep last ran (to notice that this daemon itself was frozen)
 }
@@ -220,6 +223,16 @@ func (d *Daemon) autoStep() {
 // autoPromote promotes this node. With fence set (the peer went silent) the configured fencing command must
 // succeed first, otherwise the promotion is cancelled: a silent peer may still be alive.
 func (d *Daemon) autoPromote(reason string, fence bool) {
+	// a software update (opnsense-update, pkg upgrade) is running on THIS node: it replaces the base system and the packages that a
+	// takeover uses. No takeover of its own starts next to it; the peer elects itself, or the update ends (it has a deadline).
+	if d.updateInProgress() {
+		const why = "a software update is running on this node: not taking over by itself until it ends"
+		if d.auto.Blocked() != why {
+			d.event("warning", "automatic takeover postponed: %s", why)
+		}
+		d.auto.setBlocked(why)
+		return
+	}
 	// policy: no takeover on the strength of a silence alone when nothing can switch the peer off (see the setting "fence_required")
 	if fence && d.cfg.FenceRequired && d.cfg.FenceCommand == "" {
 		const why = "the peer is silent, but fencing is required (Settings > Safety) and no fencing command is configured: not taking over by itself. Promote manually once the peer is known to be off."
@@ -301,6 +314,20 @@ func (d *Daemon) splitBrainStep(st State, alive bool, peer hbMsg) {
 // It returns the first address that answered, "" if none did. The kernel answers ping without the daemon: an answer means that the
 // machine runs, whatever its daemon does.
 func (d *Daemon) peerSystemAnswers(st State) string {
+	// the step runs twice a second while the peer is silent: the probe (a ping, and an ARP resolution that deletes the cached entry)
+	// runs at most every probeEvery, and what it found is reused in between
+	if !d.auto.probeAt.IsZero() && time.Since(d.auto.probeAt) < probeEvery {
+		return d.auto.probeAddr
+	}
+	addr := d.probePeerSystem(st)
+	d.auto.probeAt, d.auto.probeAddr = time.Now(), addr
+	return addr
+}
+
+// probeEvery: how often the peer system is probed while its daemon is silent.
+const probeEvery = 5 * time.Second
+
+func (d *Daemon) probePeerSystem(st State) string {
 	addrs := []string{}
 	for _, a := range []string{st.PeerAddr, st.PeerMgmt} {
 		if a != "" && net.ParseIP(a).To4() != nil {
@@ -326,10 +353,52 @@ func (d *Daemon) peerSystemAnswers(st State) string {
 	return found
 }
 
+// pingOnce asks whether the machine at addr is there: an ICMP echo, and if that gets no answer a fresh ARP resolution. A pf rule or
+// a sysctl (net.inet.icmp.icmplim, icmp_bmcastecho) can silence ICMP while the machine runs and forwards; ARP is answered by the
+// kernel below pf, and only means something for an address on a segment this node is attached to (the HA link): the cached entry
+// is deleted first, so that an answer was given just now and not 20 minutes ago.
 func (d *Daemon) pingOnce(addr string) bool {
+	if d.icmpAnswers(addr) {
+		return true
+	}
+	return d.arpAnswers(addr)
+}
+
+func (d *Daemon) icmpAnswers(addr string) bool {
 	if d.act != nil && d.act.ping != nil {
 		return d.act.ping(addr)
 	}
 	_, err := sh("ping", "-c", "1", "-W", "300", "-q", addr) // FreeBSD: -W in milliseconds
 	return err == nil
+}
+
+func (d *Daemon) arpAnswers(addr string) bool {
+	d.run("arp", "-d", addr)
+	d.run("ping", "-c", "1", "-W", "300", "-q", addr) // makes the kernel ask who has addr, whatever the answer to the echo is
+	out, err := d.run("arp", "-n", addr)
+	return err == nil && arpResolved(out)
+}
+
+// arpResolved reads `arp -n addr`: "? (10.99.0.1) at 0c:c4:7a:1:2:3 on igb0 expires in 1197 seconds [ethernet]" is an answer,
+// "at (incomplete)" and "no entry" are not.
+func arpResolved(out string) bool {
+	i := strings.Index(out, " at ")
+	if i < 0 {
+		return false
+	}
+	f := strings.Fields(out[i+4:])
+	if len(f) == 0 || strings.HasPrefix(f[0], "(") {
+		return false
+	}
+	// BSD prints each byte without a leading zero ("1" for "01"): net.ParseMAC would refuse it
+	parts := strings.Split(f[0], ":")
+	if len(parts) != 6 {
+		return false
+	}
+	for _, p := range parts {
+		if _, err := strconv.ParseUint(p, 16, 8); err != nil {
+			return false
+		}
+	}
+	return true
 }

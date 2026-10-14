@@ -49,7 +49,7 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 	if len(want) == 0 {
 		return nil
 	}
-	have := collectInfo().Packages
+	have := currentPackages()
 	var install []string
 	for name, ver := range want {
 		hv, ok := have[name]
@@ -74,6 +74,14 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 		return nil
 	}
 	sort.Strings(install)
+	key := strings.Join(install, ",")
+	d.pkgRetry.mu.Lock()
+	retryLater := d.pkgRetry.key == key && time.Since(d.pkgRetry.at) < pkgRetryAfter
+	d.pkgRetry.mu.Unlock()
+	if retryLater { // it failed a moment ago: not again at every push
+		d.setPkgReport(want, have)
+		return &pkgInstallError{fmt.Sprintf("plugins not installed (%s): the last attempt failed, next one in %s at most", key, pkgRetryAfter)}
+	}
 	st := d.store.Get()
 	proxy := "http://" + net.JoinHostPort(st.PeerAddr, fmt.Sprint(proxyPort(d.cfg)))
 	d.event("info", "installing %d plugin(s) replicated from the active node: %s", len(install), strings.Join(install, ", "))
@@ -110,16 +118,19 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 		d.event("warning", "plugin installation interrupted: this node is taking over (%s); it is installed again by the next sync", strings.Join(install, ", "))
 		return fmt.Errorf("package install interrupted by a takeover: %s", strings.Join(install, ", "))
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return fmt.Errorf("package install timed out: %s", strings.Join(install, ", "))
+		return d.installFailed(want, install, "timed out", "")
 	}
 	if err != nil {
 		tail := strings.TrimSpace(string(out))
 		if len(tail) > 400 {
 			tail = tail[len(tail)-400:]
 		}
-		return fmt.Errorf("package install failed (%s): %v: %s", strings.Join(install, ", "), err, tail)
+		return d.installFailed(want, install, err.Error(), tail)
 	}
-	after := collectInfo().Packages
+	d.pkgRetry.mu.Lock()
+	d.pkgRetry.key = ""
+	d.pkgRetry.mu.Unlock()
+	after := currentPackages()
 	d.setPkgReport(want, after)
 	for _, n := range install {
 		if after[n] != want[n] {
@@ -193,7 +204,7 @@ var pkgInstallTimeout = 8 * time.Minute
 
 // pkgInstall runs pkg install (a variable for the tests).
 var pkgInstall = func(ctx context.Context, env, names []string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "pkg", append([]string{"install", "-y", "--"}, names...)...)
+	cmd := exec.CommandContext(ctx, pkgBinary, append([]string{"install", "-y", "--"}, names...)...)
 	cmd.Env = env
 	ownGroup(cmd)
 	cmd.WaitDelay = 10 * time.Second
@@ -236,3 +247,35 @@ func (d *Daemon) unblockPackageInstall() {
 }
 
 var pkgStopWait = 15 * time.Second
+
+// pkgRetryAfter: a plugin installation that failed is not tried again at every configuration push (it would fail the same way and
+// keep pkg busy), but after this delay.
+const pkgRetryAfter = 15 * time.Minute
+
+// pkgInstallError is a plugin installation that did not work (a repository that refuses this node, no route to it, a timeout). It
+// does not stop the synchronisation of the configuration: the plugin set is replicated on a best-effort basis and the difference is
+// reported (status, events, pre-flight). Every other error of ensurePackages (another core version, a takeover) does stop it.
+type pkgInstallError struct{ msg string }
+
+func (e *pkgInstallError) Error() string { return e.msg }
+
+// installFailed records a failed installation (no new attempt before pkgRetryAfter), reports the difference and returns the error.
+func (d *Daemon) installFailed(want map[string]string, install []string, why, tail string) error {
+	key := strings.Join(install, ",")
+	d.pkgRetry.mu.Lock()
+	d.pkgRetry.key, d.pkgRetry.at = key, time.Now()
+	d.pkgRetry.mu.Unlock()
+	d.setPkgReport(want, currentPackages())
+	msg := fmt.Sprintf("package install failed (%s): %s", key, why)
+	if tail != "" {
+		msg += ": " + tail
+	}
+	d.event("warning", "%s; the configuration is applied anyway and the plugin is tried again later", msg)
+	return &pkgInstallError{msg}
+}
+
+// currentPackages is the plugin set installed here (a variable for the tests: collectInfo reads the pkg database).
+var currentPackages = func() map[string]string { return collectInfo().Packages }
+
+// pkgBinary is the command that installs packages (a variable for the tests).
+var pkgBinary = "pkg"

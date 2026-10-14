@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"os"
 	"regexp"
@@ -10,21 +11,54 @@ import (
 	"time"
 )
 
-// flushDev removes every address from the device and sets it down.
-func flushDev(dev string) {
-	out, _ := sh("ifconfig", dev)
-	sh("ifconfig", dev, "down") // traffic stops here; the rest is cleanup
+// flushDev removes every address from the device and sets it down (with the real commands).
+func flushDev(dev string) { flushDevWith(sh, dev) }
+
+// flushDevWith does it with the given command runner and says whether the device really is down and without addresses afterwards:
+// a command that failed (a driver that refuses "down", an address that is still configured) is not a device that went down. Every
+// step is tried whatever the others returned; the answer comes from reading the device again.
+func flushDevWith(run func(string, ...string) (string, error), dev string) error {
+	out, _ := run("ifconfig", dev)
+	run("ifconfig", dev, "down") // traffic stops here; the rest is cleanup
 	for _, l := range strings.Split(out, "\n") {
 		f := strings.Fields(l)
 		if len(f) >= 2 && f[0] == "inet" {
-			sh("ifconfig", dev, "inet", f[1], "-alias")
+			run("ifconfig", dev, "inet", f[1], "-alias")
 		} else if len(f) >= 2 && f[0] == "inet6" && !strings.HasPrefix(f[1], "fe80") {
-			sh("ifconfig", dev, "inet6", f[1], "-alias")
+			run("ifconfig", dev, "inet6", f[1], "-alias")
 		}
 	}
-	sh("ifconfig", dev, "inet6", "-ifdisabled") // harmless if unsupported
-	sh("ifconfig", dev, "-promisc")
-	sh("ifconfig", dev, "down")
+	run("ifconfig", dev, "inet6", "-ifdisabled") // harmless if unsupported
+	run("ifconfig", dev, "-promisc")
+	run("ifconfig", dev, "down")
+	after, err := run("ifconfig", dev)
+	if err != nil && strings.TrimSpace(after) == "" {
+		return nil // the device is gone (a virtual device that was destroyed): nothing carries the identity
+	}
+	if st := parseIfconfig(after); st.Exists && (st.Up || len(st.Inet) > 0 || len(st.Inet6) > 0) {
+		return fmt.Errorf("%s did not go down (up=%v, addresses %v %v)", dev, st.Up, st.Inet, st.Inet6)
+	}
+	return nil
+}
+
+// standbyDown reports the devices of the list that still carry what they must not on a standby, read from the system: an address,
+// or (outside the silent warm/hot devices of the plan) an interface that is up. A device that does not exist is down.
+func (d *Daemon) standbyDown(devs []string, warm map[string]string) []string {
+	var bad []string
+	for _, dev := range devs {
+		st := d.readIf(dev)
+		if !st.Exists {
+			continue
+		}
+		_, silentKept := warm[dev]
+		switch {
+		case len(st.Inet) > 0 || len(st.Inet6) > 0:
+			bad = append(bad, dev)
+		case st.Up && !(silentKept && st.Disabled):
+			bad = append(bad, dev)
+		}
+	}
+	return bad
 }
 
 var (

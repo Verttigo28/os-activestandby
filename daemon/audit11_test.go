@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -136,5 +137,92 @@ func TestSettingKeyIsReadFromTheConfiguration(t *testing.T) {
 	}
 	if k := settingKey(p, "mgmt_interface"); k != "" {
 		t.Fatalf("%q", k)
+	}
+}
+
+// kern.boottime cannot be read: no conclusion about the boot (an active node is not taken down for a restart of its daemon), and it
+// is said
+func TestBootTimeUnreadable(t *testing.T) {
+	d := nodeOnDisk(t, activeState(RoleMaster, 7), nil, "")
+	d.ev = &Events{path: filepath.Join(d.store.dir, "ev.log")}
+	var r recorder
+	r.install(d, nil)
+	oldTime, oldPath := bootTime, bootMarkerPath
+	bootTime = func() string { return "" }
+	bootMarkerPath = filepath.Join(d.store.dir, "boot.marker")
+	t.Cleanup(func() { bootTime, bootMarkerPath = oldTime, oldPath })
+	d.checkBoot()
+	if d.store.Get().State != StateActive || r.views != 0 {
+		t.Fatal("an active node must not be taken down on a guess")
+	}
+	said := false
+	for _, e := range d.ev.Recent(5) {
+		if strings.Contains(e.Msg, "boot time") {
+			said = true
+		}
+	}
+	if !said {
+		t.Fatal("the skipped check must be reported")
+	}
+	if _, err := os.Stat(bootMarkerPath); err == nil {
+		t.Fatal("no marker without a boot time")
+	}
+}
+
+// the marker of an EARLIER boot never counts, and a damaged one does not either
+func TestBootMarkerOfAnEarlierBootDoesNotCount(t *testing.T) {
+	for name, content := range map[string]string{"an earlier boot": "1700000000", "garbage": "\x00\x01 not a time", "empty": ""} {
+		t.Run(name, func(t *testing.T) {
+			d := nodeOnDisk(t, activeState(RoleMaster, 7), nil, "")
+			var r recorder
+			r.install(d, nil)
+			bootAt(t, d, time.Minute)
+			os.WriteFile(bootMarkerPath, []byte(content), 0o600)
+			d.checkBoot()
+			if d.store.Get().State != StateStandby {
+				t.Fatalf("a marker %q is not the marker of this boot", content)
+			}
+		})
+	}
+}
+
+// the standby path of the boot fails (the state cannot be saved: /conf full or read-only): no marker is written, so the daemon, at
+// its first start, takes the node to standby. Run end to end with the two parts.
+func TestFailedBootPathLeavesTheDaemonToDoIt(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HASYNC_DIR", dir)
+	cfg := filepath.Join(dir, "config.xml")
+	t.Setenv("HASYNC_CONFIG", cfg)
+	full := "<?xml version=\"1.0\"?><opnsense>" + strings.Repeat("<x>filler</x>", 30) + "</opnsense>\n"
+	os.WriteFile(cfg, []byte(full), 0o600)
+	os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"role":"master","state":"active","peer_fp":"fp","peer_addr":"10.0.0.2","peer_port":7690,"epoch":9}`), 0o600)
+	oldTime, oldPath := bootTime, bootMarkerPath
+	bootTime = func() string { return strconv.FormatInt(time.Now().Add(-time.Minute).Unix(), 10) }
+	bootMarkerPath = filepath.Join(dir, "boot.marker")
+	t.Cleanup(func() { bootTime, bootMarkerPath = oldTime, oldPath })
+	restore := setFsWrite(func(p string, b []byte, m os.FileMode) error {
+		if strings.HasSuffix(p, "state.json") {
+			return errors.New("read-only file system")
+		}
+		return writeFileDurable(p, b, m)
+	})
+	if err := bootStandbyWith(&actions{standbyView: func(string) error { return nil }}); err == nil {
+		t.Fatal("the boot path must report that it failed")
+	}
+	if _, err := os.Stat(bootMarkerPath); err == nil {
+		t.Fatal("a failed boot path must not write the marker")
+	}
+	restore() // the disk works again when the daemon starts
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Get().State != StateActive {
+		t.Fatal("the failed boot path left 'active' on disk (that is the situation)")
+	}
+	d := &Daemon{store: st, ops: &Ops{}, hb: newHeartbeat(), auto: &autoState{}, act: &actions{standbyView: func(string) error { return nil }, sh: func(string, ...string) (string, error) { return "", nil }}}
+	d.checkBoot()
+	if d.store.Get().State != StateStandby {
+		t.Fatal("the daemon must take the booted node to standby")
 	}
 }

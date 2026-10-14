@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -80,4 +81,55 @@ func fixedAside(t *testing.T) {
 	old := asideStamp
 	asideStamp = func() string { return "T" }
 	t.Cleanup(func() { asideStamp = old })
+}
+
+// every single failure of the identity files is repaired from the other copy, and the identity (what the peer pins) never changes
+func TestIdentityRepairedFromEverySingleFailure(t *testing.T) {
+	fixedAside(t)
+	for name, damage := range map[string]func(dir string){
+		"key missing":           func(d string) { os.Remove(filepath.Join(d, "key.pem")) },
+		"certificate missing":   func(d string) { os.Remove(filepath.Join(d, "cert.pem")) },
+		"key empty":             func(d string) { os.WriteFile(filepath.Join(d, "key.pem"), nil, 0o600) },
+		"certificate truncated": func(d string) { os.WriteFile(filepath.Join(d, "cert.pem"), []byte("-----BEGIN CERTIF"), 0o600) },
+		"key of another node": func(d string) {
+			other := t.TempDir()
+			loadIdentity(other)
+			b, _ := os.ReadFile(filepath.Join(other, "key.pem"))
+			os.WriteFile(filepath.Join(d, "key.pem"), b, 0o600)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			first, _, _ := loadIdentity(dir)
+			want := fingerprint(first.Certificate[0])
+			damage(dir)
+			c, replaced, err := loadIdentity(dir)
+			if err != nil || replaced {
+				t.Fatalf("err %v replaced %v: one damaged copy must be repaired from the other", err, replaced)
+			}
+			if fingerprint(c.Certificate[0]) != want {
+				t.Fatal("the identity changed: the peer would refuse this node")
+			}
+			// and the repair holds: the next start loads it without help
+			c2, replaced, err := loadIdentity(dir)
+			if err != nil || replaced || fingerprint(c2.Certificate[0]) != want {
+				t.Fatal("not repaired for good")
+			}
+			if fi, err := os.Stat(filepath.Join(dir, "key.pem")); err != nil || (runtime.GOOS != "js" && runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0) { // permission bits mean nothing under the wasm runner
+				t.Fatalf("the restored key must stay private: %v %v", fi, err)
+			}
+		})
+	}
+}
+
+// a node whose identity files AND backups are gone starts a new identity and says so (a paired node then goes to standby)
+func TestIdentityLostEntirelyIsReported(t *testing.T) {
+	dir := t.TempDir()
+	loadIdentity(dir)
+	for _, f := range []string{"cert.pem", "key.pem", "cert.pem.bak", "key.pem.bak"} {
+		os.Remove(filepath.Join(dir, f))
+	}
+	if _, replaced, err := loadIdentity(dir); err != nil || !replaced {
+		t.Fatalf("err %v replaced %v", err, replaced)
+	}
 }

@@ -391,12 +391,17 @@ func (d *Daemon) standbyDevice(dev string, warm map[string]string) {
 	d.flush(dev)
 }
 
-func (d *Daemon) flush(dev string) {
+// flush takes a device down and reports whether it really is (flushDevWith).
+func (d *Daemon) flush(dev string) error {
 	if d.act != nil && d.act.flush != nil {
 		d.act.flush(dev)
-		return
+		return nil
 	}
-	flushDev(dev)
+	err := flushDevWith(d.run, dev)
+	if err != nil {
+		log.Printf("flush: %v", err)
+	}
+	return err
 }
 
 // warmSet is the set of devices to keep up for this config (empty in classic mode or when no plan can be made).

@@ -25,6 +25,7 @@ type fakeDev struct {
 	ether, hw                    string
 	inet, inet6                  []string
 	refuseMAC                    bool   // the driver ignores a MAC change
+	refuseDown                   bool   // the driver refuses "ifconfig down" (an I/O error)
 	noHWLine                     bool   // ifconfig does not print "hwaddr"
 	tx                           uint64 // software transmit counter (netstat Opkts)
 }
@@ -213,6 +214,9 @@ func (h *fakeHost) sh(name string, args ...string) (string, error) {
 			d.up = true
 			rest = rest[1:]
 		case "down":
+			if d.refuseDown {
+				return "ifconfig: ioctl SIOCSIFFLAGS: Input/output error", fmt.Errorf("exit status 1")
+			}
 			d.up = false
 			rest = rest[1:]
 		case "mtu", "description":

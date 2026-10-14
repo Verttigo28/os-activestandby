@@ -94,8 +94,13 @@ type Daemon struct {
 	runIntent     string        // second copy of the transition record (intent.go); "" = runIntentPath
 	cfgProblem    string        // the settings file could not be read in full (loadConfigChecked): what is used instead
 	pkgr          pkgRun        // the plugin installation in progress (packages.go)
-	maintExpiring atomic.Bool   // the end of the maintenance mode is being written (maintenance.go)
-	standingDown  atomic.Bool   // a demotion runs (demote.go): the background work of a promotion starts nothing more
+	pkgRetry      struct {      // the last failed plugin installation: not retried before pkgRetryAfter
+		mu  sync.Mutex
+		key string
+		at  time.Time
+	}
+	maintExpiring atomic.Bool // the end of the maintenance mode is being written (maintenance.go)
+	standingDown  atomic.Bool // a demotion runs (demote.go): the background work of a promotion starts nothing more
 }
 
 func loadConfig() Config {

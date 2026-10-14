@@ -388,3 +388,13 @@ func (d *Daemon) handleReboot(w http.ResponseWriter, r *http.Request) {
 		sh("shutdown", "-r", "now")
 	}()
 }
+
+// updateInProgress: the software update that the guided upgrade runs on this node has not ended.
+func (d *Daemon) updateInProgress() bool {
+	if d.upd == nil {
+		return false
+	}
+	d.upd.mu.Lock()
+	defer d.upd.mu.Unlock()
+	return d.upd.running
+}

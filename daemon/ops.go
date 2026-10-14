@@ -82,7 +82,13 @@ func configPath() string {
 
 func activeXML(dir string) string { return filepath.Join(dir, "active.xml") }
 
+// loadIfacesHook replaces the PHP helper in the tests.
+var loadIfacesHook func(path string) (IfaceSet, error)
+
 func loadIfaces(path string) (IfaceSet, error) {
+	if loadIfacesHook != nil {
+		return loadIfacesHook(path)
+	}
 	var s IfaceSet
 	out, err := boundedCmd(false, ifacesScript, "list", path)
 	if err != nil {

@@ -4,7 +4,10 @@
 # configured, so a rebooting node can never come up with the active node's IP and MAC.
 # The guard then keeps VLAN/LAGG devices and member NICs (raised by OPNsense itself) down until the daemon runs.
 if [ -x /usr/local/sbin/hasyncd ]; then
-    /usr/local/sbin/hasyncd boot-standby
+    if ! /usr/local/sbin/hasyncd boot-standby; then
+        # the node is then guarded by boot-guard (devices kept down) and the daemon takes it to standby at its first start
+        /usr/bin/logger -t hasyncd -p daemon.err "boot-standby failed: the standby view was not written (full or read-only /conf?)"
+    fi
     /usr/sbin/daemon -f -p /var/run/hasyncd-guard.pid /usr/local/sbin/hasyncd boot-guard
 fi
 exit 0

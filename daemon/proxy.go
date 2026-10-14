@@ -23,7 +23,11 @@ func proxyPort(c Config) int { return c.ListenPort + 1 }
 
 func allowedRepoHosts() map[string]bool {
 	hosts := map[string]bool{"pkg.opnsense.org": true}
-	files, _ := filepath.Glob("/usr/local/etc/pkg/repos/*.conf")
+	var files []string
+	for _, pat := range []string{"/usr/local/etc/pkg/repos/*.conf", "/etc/pkg/*.conf", "/usr/local/etc/pkg.conf"} {
+		f, _ := filepath.Glob(pat)
+		files = append(files, f...)
+	}
 	for _, f := range files {
 		b, err := os.ReadFile(f)
 		if err != nil {

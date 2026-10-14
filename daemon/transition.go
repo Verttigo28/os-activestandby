@@ -268,6 +268,7 @@ type actions struct {
 	flush       func(dev string)
 	fence       func() error            // replaces running the fencing command
 	standbyView func(full string) error // replaces writing the standby view of config.xml
+	apply       func(xml []byte) error  // replaces applyConfig (it runs the PHP helpers)
 	ping        func(addr string) bool  // replaces the ping of the peer system (true: it answers)
 }
 

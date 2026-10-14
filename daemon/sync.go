@@ -182,12 +182,16 @@ func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad package list", 400)
 		return
 	} else if err := d.ensurePackages(want); err != nil {
-		d.event("error", "package replication: %v", err)
-		d.store.Update(func(s *State) { s.SyncError = err.Error() })
-		http.Error(w, err.Error(), 500)
-		return
+		var pe *pkgInstallError
+		if !errors.As(err, &pe) {
+			d.event("error", "package replication: %v", err)
+			d.store.Update(func(s *State) { s.SyncError = err.Error() })
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		// a plugin that cannot be installed here must not keep the standby on an old configuration: applied, and reported
 	}
-	if err := d.applyConfig(xml); err != nil {
+	if err := d.doApplyConfig(xml); err != nil {
 		log.Printf("sync: apply of revision %d FAILED, rolled back: %v", rev, err)
 		d.store.Update(func(s *State) { s.SyncError = err.Error() })
 		http.Error(w, err.Error(), 500)
@@ -415,4 +419,12 @@ func settingsFingerprint(path string) string {
 		return ""
 	}
 	return shaHex(nodeLocalRe.ReplaceAll(settingsRe.Find(b), nil))
+}
+
+// doApplyConfig is applyConfig, or the fake of the tests.
+func (d *Daemon) doApplyConfig(xml []byte) error {
+	if d.act != nil && d.act.apply != nil {
+		return d.act.apply(xml)
+	}
+	return d.applyConfig(xml)
 }

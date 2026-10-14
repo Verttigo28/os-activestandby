@@ -70,6 +70,9 @@ func (d *Daemon) localChecks() []Check {
 	if d.cfgProblem != "" {
 		cs = append(cs, fail("settings", d.cfgProblem+". Save the settings again (System > Active/Standby HA) to rewrite the file"))
 	}
+	if r := d.packageReport(); r != "" {
+		cs = append(cs, warn("plugins", r+" (the configuration is replicated anyway; a plugin that cannot be installed here, for example from a repository that refuses this node, is tried again every 15 minutes)"))
+	}
 	if why := d.protoBlock(); why != "" {
 		cs = append(cs, fail("protocol", why+". Configuration and ruleset pushes and a graceful failover are refused until then; the automatic takeover is not affected"))
 	}
