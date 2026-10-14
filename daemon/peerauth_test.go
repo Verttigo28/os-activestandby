@@ -46,7 +46,7 @@ func TestEveryPeerEndpointIsRestrictedToThePinnedPeer(t *testing.T) {
 			endpoints = append(endpoints, r.path)
 		}
 	}
-	if len(endpoints) < 16 {
+	if len(endpoints) < 18 {
 		t.Fatalf("only %d routes that change something", len(endpoints))
 	}
 	for _, p := range endpoints {

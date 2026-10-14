@@ -20,6 +20,16 @@
         <div id="opPreOut" style="margin-top:10px"></div>
 
         <hr/>
+        <h2>{{ lang._('Plugin version') }}</h2>
+        <p>{{ lang._('This plugin is not in the OPNsense repositories, so the firmware update never updates it. Both nodes must run the same version: the older one installs the package of the newer one, over the encrypted link between the nodes, and restarts its HA service (the firewall keeps forwarding).') }}</p>
+        <p>
+            <span id="opPlugThis" class="label label-default">-</span>
+            <span id="opPlugPeer" class="label label-default" style="margin-left:6px">-</span>
+            <button class="btn btn-default btn-sm" id="opPlugSync" style="margin-left:8px" disabled><i class="fa fa-exchange"></i> {{ lang._('Synchronize plugin version') }}</button>
+        </p>
+        <div id="opPlugRes" class="alert" style="display:none"></div>
+
+        <hr/>
         <h2>{{ lang._('Upgrade assistant') }}</h2>
         <p>{{ lang._('Updates both nodes one after the other without an outage: the standby is updated and rebooted first, then the roles are switched and the other node is updated. Do not change the configuration while it runs. Maintenance mode is switched on for the duration and the job stops (leaving maintenance mode on) if anything goes wrong.') }}</p>
         <p>
@@ -57,14 +67,31 @@ $(function () {
     const esc = s => $('<div>').text(s === undefined || s === null ? '' : s).html().replace(/"/g, '&quot;').replace(/'/g, '&#39;'); // text and quoted attributes
     const lbl = {pass: 'success', warn: 'warning', fail: 'danger'};
     const PHASES = [
-        ['r1-update', '{{ lang._('Update the standby') }}'], ['r1-reboot', '{{ lang._('Reboot the standby') }}'], ['r1-wait', '{{ lang._('Wait until the standby is back') }}'],
+        ['r1-update', '{{ lang._('Update the standby') }}'], ['r1-reboot', '{{ lang._('Reboot the standby') }}'], ['r1-wait', '{{ lang._('Wait until the standby is back') }}'], ['r1-verify', '{{ lang._('Check that nothing is left to update on it') }}'],
         ['failover', '{{ lang._('Switch the active role to the updated node') }}'],
-        ['r2-update', '{{ lang._('Update the other node') }}'], ['r2-reboot', '{{ lang._('Reboot the other node') }}'], ['r2-wait', '{{ lang._('Wait until it is back') }}'],
+        ['r2-update', '{{ lang._('Update the other node') }}'], ['r2-reboot', '{{ lang._('Reboot the other node') }}'], ['r2-wait', '{{ lang._('Wait until it is back') }}'], ['r2-verify', '{{ lang._('Check that nothing is left to update on it') }}'],
+        ['plugin', '{{ lang._('Same plugin version on both nodes') }}'],
         ['failback', '{{ lang._('Give the active role back (optional)') }}'], ['done', '{{ lang._('Finished') }}']
     ];
 
+    function refreshPlugin(s) {
+        const a = s.plugin_version || '', b = s.peer_plugin_version || '';
+        const same = a !== '' && a === b;
+        $('#opPlugThis').attr('class', 'label label-' + (a ? 'info' : 'default')).text('{{ lang._('This node') }}: ' + (a || '?'));
+        $('#opPlugPeer').attr('class', 'label label-' + (!b ? 'default' : (same ? 'success' : 'danger'))).text('{{ lang._('Peer') }}: ' + (b || '{{ lang._('unknown') }}'));
+        $('#opPlugSync').prop('disabled', !s.peer_alive || !b || same).attr('title', same ? '{{ lang._('Both nodes run the same version') }}' : '');
+    }
+    $('#opPlugSync').click(function () {
+        stdDialogConfirm('{{ lang._('Synchronize plugin version') }}', '{{ lang._('The older node installs the plugin package of the newer one and restarts its HA service. Continue?') }}', '{{ lang._('Synchronize') }}', '{{ lang._('Cancel') }}', function () {
+            ajaxCall('/api/activestandby/pairing/pluginsync', {}, function (r) {
+                $('#opPlugRes').attr('class', 'alert alert-' + (r && r.error ? 'danger' : 'info')).text((r && (r.error || r.message)) || '{{ lang._('Started: follow the events.') }}').show();
+            });
+        });
+    });
+
     function refreshMaint() {
         ajaxGet('/api/activestandby/pairing/status', {}, function (s) {
+            refreshPlugin(s);
             const on = !!s.maintenance;
             $('#opMaint').attr('class', 'label label-' + (on ? 'warning' : 'default')).text(on ? '{{ lang._('ON until') }} ' + (s.maintenance_until_local || (s.maintenance_until || '').replace('T', ' ').replace('Z', ' UTC')) : '{{ lang._('off') }}');
         });

@@ -71,3 +71,14 @@ func boundedCmdFor(limit time.Duration, combined bool, name string, args ...stri
 	}
 	return out, err
 }
+
+// boundedCmdCtx runs a command that stops when ctx ends (an installation that a promotion can cancel), process group included.
+func boundedCmdCtx(ctx context.Context, combined bool, name string, args ...string) ([]byte, error) {
+	c := exec.CommandContext(ctx, name, args...)
+	ownGroup(c)
+	c.WaitDelay = 10 * time.Second
+	if combined {
+		return c.CombinedOutput()
+	}
+	return c.Output()
+}

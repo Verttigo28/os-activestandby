@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -87,7 +86,11 @@ func (d *Daemon) startUpgrade(failback bool) error {
 		if !u.Checked {
 			return errors.New("update status unknown: run \"Check for updates\" first")
 		}
-		return errors.New("no updates available (last check " + u.LastCheck + "): nothing to do")
+		msg := "no updates available (last check " + u.LastCheck + "): nothing to do"
+		if a, _, p := d.hb.Snapshot(); a && p.Plug != "" && p.Plug != d.pluginVersion() {
+			msg += "; the plugin versions differ (this node " + d.pluginVersion() + ", the peer " + p.Plug + "): use \"Synchronize plugin version\""
+		}
+		return errors.New(msg)
 	}
 	pf := d.preflight()
 	if pf["summary"] == "fail" {
@@ -137,7 +140,7 @@ func (d *Daemon) jobStep() {
 				d.jobFail("the standby is not reachable or not standby")
 				return
 			}
-			if _, err := d.peerCall("/v1/update/start", 20*time.Second); err != nil {
+			if _, err := d.callPeer("/v1/update/start", 20*time.Second); err != nil {
 				d.jobFail("could not start the update on the standby: " + err.Error())
 				return
 			}
@@ -145,8 +148,15 @@ func (d *Daemon) jobStep() {
 			d.jobSet(j.Phase, "running")
 			return
 		}
-		m, err := d.peerCall("/v1/update/status", 20*time.Second)
+		m, err := d.callPeer("/v1/update/status", 20*time.Second)
 		if err != nil {
+			// The update of OPNsense itself reboots the node when it replaced the kernel or the base system (the firmware script does
+			// it, as the GUI's update does): the silence of the standby is then the expected end of the update, not a failure.
+			if !alive && d.hb.silentFor() > 15*time.Second {
+				d.jobLog("the standby went down: the update replaced the kernel or the base system and rebooted it")
+				d.jobSet(strings.Replace(j.Phase, "update", "wait", 1), "")
+				return
+			}
 			if time.Since(parseTime(j.Updated)) > updateTimeout+10*time.Minute {
 				d.jobFail("the standby did not report on its update in time: " + err.Error())
 			}
@@ -162,11 +172,16 @@ func (d *Daemon) jobStep() {
 			d.jobFail(fmt.Sprintf("the update on the standby failed (rc %v): %v", rc, m["tail"]))
 			return
 		}
+		if reboot, _ := m["reboot"].(bool); reboot {
+			d.jobLog("update finished on the standby, which reboots by itself (kernel or base system replaced)")
+			d.jobSet(strings.Replace(j.Phase, "update", "wait", 1), "")
+			return
+		}
 		d.jobLog("update finished on the standby")
 		d.jobSet(strings.Replace(j.Phase, "update", "reboot", 1), "")
 	case "r1-reboot", "r2-reboot":
 		if j.Sub == "" {
-			if _, err := d.peerCall("/v1/reboot", 10*time.Second); err != nil {
+			if _, err := d.callPeer("/v1/reboot", 10*time.Second); err != nil {
 				d.jobFail("could not reboot the standby: " + err.Error())
 				return
 			}
@@ -197,18 +212,39 @@ func (d *Daemon) jobStep() {
 		j = d.store.Get().Job
 		if ok && j.WaitSince != "" && time.Since(parseTime(j.WaitSince)) > 20*time.Second {
 			d.jobLog("the standby is back (" + peer.Ver + ")")
-			if j.Phase == "r1-wait" {
-				d.jobSet("failover", "")
-			} else if j.Failback {
-				d.jobSet("failback", "")
-			} else {
-				d.jobFinish()
-			}
+			// never "done" on the word of a log: ask the standby what it still has to update
+			d.jobSet(strings.Replace(j.Phase, "wait", "verify", 1), "")
 			return
 		}
 		if time.Since(parseTime(j.Updated)) > 15*time.Minute {
 			d.jobFail("the standby did not come back within 15 minutes")
 		}
+	case "r1-verify", "r2-verify":
+		if !alive || peer.State != StateStandby {
+			if time.Since(parseTime(j.Updated)) > 15*time.Minute {
+				d.jobFail("the standby is not available to verify its update")
+			}
+			return
+		}
+		pending, err := d.verifyPeerUpdate()
+		if err != nil {
+			if time.Since(parseTime(j.Updated)) > 15*time.Minute {
+				d.jobFail("the standby could not verify its update: " + err.Error())
+			}
+			return // tried again at the next step
+		}
+		if len(pending) > 0 {
+			d.jobFail("the update did not complete on the standby, still pending: " + strings.Join(pending, ", ") + " (the log of the update is on the standby: /conf/activestandby/update.log)")
+			return
+		}
+		d.jobLog("verified: nothing is left to update on the standby")
+		if j.Phase == "r1-verify" {
+			d.jobSet("failover", "")
+		} else {
+			d.jobFinish()
+		}
+	case "plugin":
+		d.pluginStep(j, alive, peer)
 	case "failover":
 		d.jobLog("failing over to the updated node")
 		// the job moves with the active role: the peer continues with round 2
@@ -232,14 +268,83 @@ func (d *Daemon) jobStep() {
 			d.jobFail("failback refused: " + err.Error())
 			return
 		}
-		d.jobFinish()
+		d.jobDone()
 	}
 }
 
+// jobFinish: both nodes are updated; the last step makes sure they run the same version of this plugin (it is not in the OPNsense
+// repositories, so the firmware update never touches it). It runs on the active node, before the optional failback: a node that has
+// just given the role back does not drive the job any more.
 func (d *Daemon) jobFinish() {
+	d.jobSet("plugin", "")
+}
+
+// pluginStep waits for the plugin versions of both nodes to be equal, starting the synchronisation if they are not.
+func (d *Daemon) pluginStep(j *Job, alive bool, peer hbMsg) {
+	if !alive {
+		if time.Since(parseTime(j.Updated)) > 15*time.Minute {
+			d.jobFail("the peer is not reachable to compare the plugin versions")
+		}
+		return
+	}
+	if peer.Plug == d.pluginVersion() {
+		if j.Failback {
+			d.jobSet("failback", "")
+		} else {
+			d.jobDone()
+		}
+		return
+	}
+	if j.Sub == "" {
+		d.jobLog(fmt.Sprintf("the plugin versions differ (this node %s, the peer %s): synchronising", d.pluginVersion(), peer.Plug))
+		d.jobSet("plugin", "syncing")
+		if msg, err := d.startPluginSync(); err != nil {
+			d.jobFail("plugin synchronisation: " + err.Error())
+		} else {
+			d.jobLog(msg)
+		}
+		return
+	}
+	if time.Since(parseTime(j.Updated)) > 10*time.Minute {
+		d.jobFail(fmt.Sprintf("the plugin versions are still different (this node %s, the peer %s)", d.pluginVersion(), peer.Plug))
+	}
+}
+
+// jobDone ends the job: both nodes are updated and run the same plugin.
+func (d *Daemon) jobDone() {
 	d.jobSet("done", "")
-	d.jobLog("upgrade finished on both nodes")
+	d.jobLog("upgrade finished on both nodes (same OPNsense and plugin versions)")
 	d.setMaintenance(false, 0, false)
+}
+
+// verifyPeerUpdate asks the standby to look again for updates (through this node's proxy) and returns what is still pending.
+func (d *Daemon) verifyPeerUpdate() ([]string, error) {
+	if d.act != nil && d.act.verify != nil {
+		return d.act.verify()
+	}
+	st := d.store.Get()
+	cl := d.peerClient(st.PeerFP, nil)
+	cl.Timeout = 6 * time.Minute
+	resp, err := cl.Post("https://"+net.JoinHostPort(d.peerEndpoint(st), fmt.Sprint(st.PeerPort))+"/v1/update/status?verify=1", "application/json", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Checked bool     `json:"checked"`
+		Pending []string `json:"pending"`
+		Error   string   `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&out); err != nil || resp.StatusCode != 200 {
+		return nil, fmt.Errorf("the standby answered %d", resp.StatusCode)
+	}
+	if out.Error != "" {
+		return nil, errors.New(out.Error)
+	}
+	if !out.Checked {
+		return nil, errors.New("the standby could not check for updates")
+	}
+	return out.Pending, nil
 }
 
 func parseTime(s string) time.Time {
@@ -300,6 +405,7 @@ type updateRun struct {
 	running bool
 	done    bool
 	rc      int
+	reboot  bool // the update replaced the kernel or the base system and reboots the node itself
 }
 
 // kept in the root-only state directory: a fixed name in /tmp could be pre-created as a symlink by a local user
@@ -322,58 +428,146 @@ func (d *Daemon) handleUpdateStart(w http.ResponseWriter, r *http.Request) {
 	d.setUnlocked(time.Now().Add(60 * time.Minute)) // migrations must be able to write the config
 	unlockConfig()
 	proxy := "http://" + peerHostPort(st, proxyPort(d.cfg))
+	// The update that the firmware page of OPNsense runs (launcher.sh update: the packages, then the base system and the kernel, and a
+	// reboot when it replaced the kernel or the base), with the proxy of the active node in its environment. The sequence this daemon
+	// used before (opnsense-update, then pkg upgrade) never replaced the base system and the kernel, and reported success.
+	started := time.Now()
+	os.WriteFile(updateStarted, []byte(started.UTC().Format(time.RFC3339)), 0o600)
 	go func() {
-		out, err := execShellFor(updateTimeout,
-			"export HTTP_PROXY="+proxy+" HTTPS_PROXY="+proxy+"; (opnsense-update; echo \"opnsense-update rc=$?\"; pkg upgrade -y; echo \"pkg upgrade rc=$?\") > "+updateLog+" 2>&1; "+
-				"tail -c 4000 "+updateLog+" | grep -q 'pkg upgrade rc=0'")
-		_ = out
+		_, err := execShellFor(updateTimeout, updateScript(proxy))
+		done, ok, reboot := updateOutcome(readProgress(started))
 		d.upd.mu.Lock()
-		d.upd.running, d.upd.done = false, true
-		if err != nil {
+		d.upd.running, d.upd.done, d.upd.reboot = false, true, reboot
+		if err != nil || !done || !ok {
 			d.upd.rc = 1
 		}
 		d.upd.mu.Unlock()
-		d.event("change", "software update on this standby finished (rc %d)", d.upd.rc)
+		d.event("change", "software update on this standby finished (rc %d, reboot %v)", d.upd.rc, reboot)
 	}()
 	writeJSON(w, 200, map[string]string{"status": "started"})
 }
 
+const (
+	firmwareProgress = "/tmp/pkg_upgrade.progress"          // written by the firmware scripts of OPNsense (the page of the GUI reads it)
+	updateStarted    = "/conf/activestandby/update.started" // its modification time: when this daemon started the update
+)
+
+// updateScript is the update that the firmware page of OPNsense runs, with the proxy of the active node (the standby has no WAN).
+func updateScript(proxy string) string {
+	return "export HTTP_PROXY=" + proxy + " HTTPS_PROXY=" + proxy + "; /usr/local/opnsense/scripts/firmware/launcher.sh update > " + updateLog + " 2>&1"
+}
+
+// updateOutcome reads the progress file of the firmware script: done when it wrote its end marker, ok when nothing went wrong
+// ("Partial update failure" is what update.sh writes when the packages could not be updated), reboot when the node reboots by itself.
+// The progress of another request (a check) or of nothing is not the progress of an update.
+func updateOutcome(progress string) (done, ok, reboot bool) {
+	if !strings.Contains(progress, "***GOT REQUEST TO UPDATE***") {
+		return false, false, false
+	}
+	reboot = strings.Contains(progress, "***REBOOT***")
+	done = reboot || strings.Contains(progress, "***DONE***")
+	ok = done && !strings.Contains(progress, "Partial update failure") && !strings.Contains(progress, "safety violation")
+	return
+}
+
+// readProgress returns the progress file when it is the one of an update started at or after since: a file from before (or none) means
+// that the firmware script did not run (it exits silently when another update holds its lock), and it must not be taken for ours.
+func readProgress(since time.Time) string {
+	fi, err := os.Lstat(firmwareProgress)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > 4<<20 || fi.Mode().Perm()&0o022 != 0 || checkOwnerRoot(fi) != nil {
+		return ""
+	}
+	if fi.ModTime().Before(since.Add(-2 * time.Second)) {
+		return ""
+	}
+	b, _ := os.ReadFile(firmwareProgress)
+	return string(b)
+}
+
+// updateFromProgress: the state of an update that this daemon did not start itself (it was restarted while the update ran: the upgrade of
+// this plugin restarts it). The update went on; its progress file says how far it is. started is when it was started (zero: never).
+func updateFromProgress(progress string, started time.Time) (running, done bool, rc int, reboot bool) {
+	if started.IsZero() || progress == "" {
+		return false, false, 0, false
+	}
+	done, ok, reboot := updateOutcome(progress)
+	switch {
+	case !done && strings.Contains(progress, "***GOT REQUEST TO UPDATE***"):
+		return true, false, 0, false
+	case done && ok:
+		return false, true, 0, reboot
+	case done:
+		return false, true, 1, reboot
+	}
+	return false, false, 0, false
+}
+
 func (d *Daemon) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("verify") == "1" {
+		d.handleUpdateVerify(w)
+		return
+	}
 	d.upd.mu.Lock()
-	running, done, rc := d.upd.running, d.upd.done, d.upd.rc
+	running, done, rc, reboot := d.upd.running, d.upd.done, d.upd.rc, d.upd.reboot
 	d.upd.mu.Unlock()
-	tail, full := "", ""
+	tail := ""
 	if b, err := os.ReadFile(updateLog); err == nil {
-		full = string(b)
-		tail = full
+		tail = string(b)
 		if len(tail) > 400 {
 			tail = tail[len(tail)-400:]
 		}
 	}
 	if !running && !done {
-		// this daemon did not start the update it is asked about: it was restarted while the update ran (the upgrade of this plugin
-		// restarts it). The update itself went on, and its log says how far it is.
-		running, done, rc = updateFromLog(full)
+		var started time.Time
+		if fi, err := os.Stat(updateStarted); err == nil {
+			started = fi.ModTime()
+		}
+		running, done, rc, reboot = updateFromProgress(readProgress(started), started)
 	}
-	writeJSON(w, 200, map[string]any{"running": running, "done": done, "rc": rc, "tail": tail})
+	writeJSON(w, 200, map[string]any{"running": running, "done": done, "rc": rc, "reboot": reboot, "tail": tail})
 }
 
-// updateFromLog reads the state of an update from its log: done when the last step ("pkg upgrade rc=N") was written, running before
-// (a log that exists); nothing to report when there is no log.
-func updateFromLog(log string) (running, done bool, rc int) {
-	i := strings.LastIndex(log, "pkg upgrade rc=")
-	if i < 0 {
-		return log != "", false, 0
+// handleUpdateVerify: the standby looks for updates again (the check of the firmware page, through the proxy of the active node) and
+// says what is still pending. The guided upgrade is over only when this answer is empty: never on the word of a log.
+func (d *Daemon) handleUpdateVerify(w http.ResponseWriter) {
+	st := d.store.Get()
+	if st.State != StateStandby || !d.maintenanceOn() {
+		http.Error(w, "refused: only a standby in maintenance mode may be checked", http.StatusConflict)
+		return
 	}
-	v := strings.TrimSpace(log[i+len("pkg upgrade rc="):])
-	if j := strings.IndexAny(v, " \n\r"); j >= 0 {
-		v = v[:j]
+	if d.updateInProgress() {
+		http.Error(w, "an update is running", http.StatusConflict)
+		return
 	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		n = 1
+	proxy := "http://" + peerHostPort(st, proxyPort(d.cfg))
+	_, err := execShellFor(4*time.Minute, "export HTTP_PROXY="+proxy+" HTTPS_PROXY="+proxy+"; /usr/local/opnsense/scripts/firmware/launcher.sh check > /dev/null 2>&1")
+	pending, checked, perr := pendingUpdates(loadUpdateInfo())
+	out := map[string]any{"checked": checked, "pending": pending}
+	if perr != "" {
+		out["error"] = perr
+	} else if err != nil && !checked {
+		out["error"] = "the update check did not complete: " + err.Error()
 	}
-	return false, true, n
+	writeJSON(w, 200, out)
+}
+
+// pendingUpdates turns the result of a check into what is left to do. A check that did not reach the repository is not "nothing
+// pending": it is an error.
+func pendingUpdates(u UpdateInfo) (pending []string, checked bool, problem string) {
+	if !u.Checked {
+		return nil, false, "the check left no result"
+	}
+	if u.Connection != "" && u.Connection != "ok" {
+		return nil, false, "the standby could not reach the repository (" + u.Connection + ")"
+	}
+	pending = append(pending, u.Packages...)
+	if u.Count > len(pending) {
+		pending = append(pending, fmt.Sprintf("and %d more", u.Count-len(pending)))
+	}
+	if u.MajorVersion != "" {
+		pending = append(pending, "major upgrade to "+u.MajorVersion)
+	}
+	return pending, true, ""
 }
 
 func (d *Daemon) handleReboot(w http.ResponseWriter, r *http.Request) {
@@ -397,4 +591,10 @@ func (d *Daemon) updateInProgress() bool {
 	d.upd.mu.Lock()
 	defer d.upd.mu.Unlock()
 	return d.upd.running
+}
+
+// readSmall reads a small file that may not exist.
+func readSmall(path string) string {
+	b, _ := os.ReadFile(path)
+	return string(b)
 }

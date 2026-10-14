@@ -94,6 +94,7 @@ type Daemon struct {
 	runIntent     string        // second copy of the transition record (intent.go); "" = runIntentPath
 	cfgProblem    string        // the settings file could not be read in full (loadConfigChecked): what is used instead
 	pkgr          pkgRun        // the plugin installation in progress (packages.go)
+	pluginVer     string        // test override of the plugin version (plugin.go)
 	pkgRetry      struct {      // the last failed plugin installation: not retried before pkgRetryAfter
 		mu  sync.Mutex
 		key string
@@ -305,6 +306,8 @@ func (d *Daemon) peerRoutes() []peerRoute {
 		{"/v1/job", d.handleJobAdopt, false},
 		{"/v1/sessions", d.handleSessions, false},
 		{"/v1/ruleset", d.handleRuleset, false},
+		{"/v1/plugin/get", d.handlePluginGet, false},
+		{"/v1/plugin/pull", d.handlePluginPull, false},
 	}
 }
 

@@ -111,6 +111,7 @@ func (d *Daemon) ctlStatus(w http.ResponseWriter, r *http.Request) {
 		out["transition_unfinished"] = true // a promotion or demotion is recorded as started and not finished (intent.go)
 	}
 	out["protocol"], out["fence_required"], out["settings_problem"] = protoVersion, d.cfg.FenceRequired, d.cfgProblem
+	out["plugin_version"] = d.pluginVersion()
 	if st.Kit != nil {
 		out["kit"] = map[string]string{"peer": st.Kit.Peer, "expires": st.Kit.Expires, "error": st.Kit.Error}
 	}
@@ -122,6 +123,7 @@ func (d *Daemon) ctlStatus(w http.ResponseWriter, r *http.Request) {
 		out["peer_alive"], out["peer_state"], out["peer_epoch"] = alive, peer.State, peer.Epoch
 		out["peer_hostname"], out["peer_warm"] = peer.Host, peer.Warm
 		out["peer_mgmt_probe"] = peer.MgmtProbe
+		out["peer_plugin_version"] = peer.Plug
 		out["peer_last_hb_ms"] = ago.Milliseconds()
 		out["paths"] = map[string]bool{"ha": d.hb.PathAlive("ha"), "mgmt": d.hb.PathAlive("mgmt")}
 		pv, mism := d.versionInfo()
@@ -258,6 +260,8 @@ func runCtl(args []string) int {
 			on = "1"
 		}
 		resp, err = cl.Post(fmt.Sprintf("http://ctl/maintenance?on=%s&hours=%d", on, *hours), "application/json", nil)
+	case "plugin-sync": // bring both nodes to the newer plugin version
+		resp, err = cl.Post("http://ctl/plugin-sync", "application/json", nil)
 	case "upgrade": // upgrade start [--failback] | cancel | status
 		switch sub {
 		case "start":

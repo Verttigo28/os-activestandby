@@ -1,26 +1,90 @@
 package main
 
 import (
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// the update of a standby goes on when its daemon restarts (the upgrade of this plugin restarts it): the new daemon reads the
-// state of the update from its log instead of answering "not done" for ever
-func TestUpdateStateFromItsLog(t *testing.T) {
-	for log, want := range map[string][3]any{
-		"":                       {false, false, 0},
-		"Fetching...\n":          {true, false, 0},
-		"opnsense-update rc=0\n": {true, false, 0},
-		"opnsense-update rc=0\npkg upgrade rc=0\n": {false, true, 0},
-		"pkg upgrade rc=3\n":                       {false, true, 3},
-		"pkg upgrade rc=x\n":                       {false, true, 1},
+const progressHead = "***GOT REQUEST TO UPDATE***\nCurrently running OPNsense 26.7 at Mon\n"
+
+// The outcome of an update is read from the progress file of the firmware script, never from the exit code of a shell pipeline: the old
+// sequence (opnsense-update; pkg upgrade) never replaced the kernel and the base system and was reported as a success.
+func TestUpdateOutcomeFromTheFirmwareProgress(t *testing.T) {
+	for name, c := range map[string]struct {
+		text             string
+		done, ok, reboot bool
+	}{
+		"nothing":             {"", false, false, false},
+		"a check, not us":     {"***GOT REQUEST TO CHECK FOR UPDATES***\n***DONE***\n", false, false, false},
+		"running":             {progressHead + "Fetching\n", false, false, false},
+		"done":                {progressHead + "***DONE***\n", true, true, false},
+		"reboot":              {progressHead + "***REBOOT***\n", true, true, true},
+		"partial failure":     {progressHead + "Partial update failure detected: report this error log to OPNsense.\n***DONE***\n", true, false, false},
+		"unsafe argument":     {progressHead + "firmware: safety violation in argument during UPDATE\n***DONE***\n", true, false, false},
+		"failure then reboot": {progressHead + "Partial update failure detected\n***REBOOT***\n", true, false, true},
 	} {
-		r, d, rc := updateFromLog(log)
-		if r != want[0] || d != want[1] || rc != want[2] {
-			t.Errorf("%q: running=%v done=%v rc=%d, want %v", log, r, d, rc, want)
+		done, ok, reboot := updateOutcome(c.text)
+		if done != c.done || ok != c.ok || reboot != c.reboot {
+			t.Errorf("%s: done=%v ok=%v reboot=%v, want %v %v %v", name, done, ok, reboot, c.done, c.ok, c.reboot)
 		}
+	}
+}
+
+// the daemon of the standby restarts during the update (the upgrade of this plugin does it): the new daemon reads where the update is
+func TestUpdateStateAfterADaemonRestart(t *testing.T) {
+	started := time.Now()
+	for name, c := range map[string]struct {
+		text          string
+		started       time.Time
+		running, done bool
+		rc            int
+		reboot        bool
+	}{
+		"never started":       {progressHead + "***DONE***\n", time.Time{}, false, false, 0, false},
+		"no progress":         {"", started, false, false, 0, false},
+		"running":             {progressHead + "Fetching\n", started, true, false, 0, false},
+		"finished":            {progressHead + "***DONE***\n", started, false, true, 0, false},
+		"finished and reboot": {progressHead + "***REBOOT***\n", started, false, true, 0, true},
+		"failed":              {progressHead + "Partial update failure detected\n***DONE***\n", started, false, true, 1, false},
+		"progress of a check": {"***GOT REQUEST TO CHECK FOR UPDATES***\nFetching\n", started, false, false, 0, false},
+	} {
+		r, d, rc, reb := updateFromProgress(c.text, c.started)
+		if r != c.running || d != c.done || rc != c.rc || reb != c.reboot {
+			t.Errorf("%s: running=%v done=%v rc=%d reboot=%v", name, r, d, rc, reb)
+		}
+	}
+}
+
+// "nothing left" is said by a check that reached the repository, not by the absence of an answer
+func TestPendingUpdatesNeedsARealCheck(t *testing.T) {
+	if _, checked, problem := pendingUpdates(UpdateInfo{}); checked || problem == "" {
+		t.Fatal("no result of a check is not 'nothing pending'")
+	}
+	if _, checked, problem := pendingUpdates(UpdateInfo{Checked: true, Connection: "unresolved"}); checked || !strings.Contains(problem, "unresolved") {
+		t.Fatalf("a check that did not reach the repository is an error: %v %q", checked, problem)
+	}
+	p, checked, problem := pendingUpdates(UpdateInfo{Checked: true, Connection: "ok"})
+	if !checked || problem != "" || len(p) != 0 {
+		t.Fatalf("a clean check: %v %v %q", p, checked, problem)
+	}
+	u := UpdateInfo{Checked: true, Connection: "ok", Available: true, Count: 15, Packages: []string{"base", "kernel"}, MajorVersion: "27.1"}
+	p, _, _ = pendingUpdates(u)
+	if got := strings.Join(p, ","); got != "base,kernel,and 13 more,major upgrade to 27.1" {
+		t.Fatalf("pending: %s", got)
+	}
+}
+
+func TestUpdateScriptRunsTheOfficialFirmwareUpdateThroughTheProxy(t *testing.T) {
+	s := updateScript("http://10.9.9.1:7701")
+	for _, want := range []string{"HTTP_PROXY=http://10.9.9.1:7701", "HTTPS_PROXY=http://10.9.9.1:7701", "firmware/launcher.sh update"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("%q is missing from %q", want, s)
+		}
+	}
+	if strings.Contains(s, "pkg upgrade") {
+		t.Error("the update must be the one of the firmware page, not a bare pkg upgrade (it never replaces the kernel and the base system)")
 	}
 }
 

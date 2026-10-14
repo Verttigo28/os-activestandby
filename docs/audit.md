@@ -240,3 +240,19 @@ What this does not solve: a machine that no longer forwards but still answers pi
 | pkg kills what the install script starts (reaper) | not confirmed: checked on the lab, the restarted daemon kept running after `pkg add` | none |
 
 Simulated (Go tests on fakes of the system) vs real: the model tests prove the decision logic only; the daemon-dead guard, a crash of the whole machine, the in-place upgrade of the plugin on both nodes and the merge with different keys were run on the OPNsense lab (two Supermicro servers, Intel X710, MikroTik switch). The boot check, the demotion with a full `/conf` and the reordering after a power loss were not reproduced on the hardware.
+
+## Twelfth round (1.0.5): the field error of 09281e5 and the upgrade assistant
+
+Inputs: an independent audit of 09281e5 with a field error (a failing plugin install blocking the config sync), a review of `promote.go`, then a complaint from the lab: the assistant "says updates are available, does not update, and the nodes run two plugin versions".
+
+| # | Finding | Evidence | Status |
+|---|---------|----------|--------|
+| 1 | A plugin that cannot be installed (a repository that answers `Forbidden`) refused the whole config sync | test reproducing the field message, before the fix | fixed: best effort, retried every 15 min; a core version difference stays fatal |
+| 2 | Demotion released the peer although a device refused `ifconfig down` (`devicesDown` was set without looking) | test with a driver that refuses `down` | fixed: read back, retried once, otherwise the node keeps its role and says so |
+| 3 | `promote.go` ignored the errors of flush, rename, chmod, directory sync of the merged configuration | review | fixed: one checked atomic commit, aborts before any state change |
+| 4 | The assistant updated with `opnsense-update; pkg upgrade`: no kernel, no base, success = last exit code | read on the lab: `opn-test2` kept base and kernel pending (p1 against p4) after a "finished" job | fixed: official `launcher.sh update`, outcome from its progress file, reboot by the update accepted, verification by a new check on the standby |
+| 5 | The plugin is not in the repositories: nodes stayed on two versions for ever | lab: 1.0.4 on one node, a dev build on the other | fixed: plugin sync (pull over the pinned connection), button, CLI, last step of the guided upgrade |
+| 6 | `peerCall` read the 202 of the pull request as an error | found on the lab on the first real sync (the sync itself worked, the event said it failed) | fixed: the endpoint answers 200 |
+| 7 | The failback gave the role back before the plugin step, and the node that gave it back no longer drives the job | design review of the new phase | fixed: the plugin step comes first, failback last |
+
+Hardware and simulation are kept apart: the job state machine (reboot by the update, failed update, pending after verification, plugin step, failback order) and the parsing of the progress file are **simulated** (`upgrade_job_test.go`, `upgrade_status_test.go`); the plugin package exchange between two real nodes and the daemon restart of an active node are **verified on the two-node lab** (see docs/validation.md).

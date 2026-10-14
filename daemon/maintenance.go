@@ -55,7 +55,7 @@ func (d *Daemon) setMaintenance(on bool, hours int, fromPeer bool) {
 		if on {
 			q = fmt.Sprintf("/v1/maintenance?on=1&hours=%d", hours)
 		}
-		if _, err := d.peerCall(q, 5*time.Second); err != nil {
+		if _, err := d.callPeer(q, 5*time.Second); err != nil {
 			d.event("warning", "could not tell the peer about the maintenance mode change: %v", err)
 		}
 	}

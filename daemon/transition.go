@@ -273,6 +273,7 @@ type actions struct {
 	arp         func(addr string) bool              // replaces the ARP resolution of the peer system (with ping set and arp nil: no answer)
 	rename      func(oldPath, newPath string) error // replaces os.Rename in the commit of the merged configuration
 	syncFile    func(path string) error             // replaces the flush of a file written by a helper
+	verify      func() ([]string, error)            // replaces the check of the standby at the end of a round of the guided upgrade
 }
 
 func (d *Daemon) doPromote(reason string) error {

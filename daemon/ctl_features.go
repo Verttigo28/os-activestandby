@@ -50,6 +50,14 @@ func (d *Daemon) registerCtl2(mux *http.ServeMux) {
 	mux.HandleFunc("/preflight", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, d.preflight())
 	})
+	mux.HandleFunc("/plugin-sync", func(w http.ResponseWriter, r *http.Request) {
+		// it takes minutes (the older node installs the plugin and restarts its daemon): started in the background, the result is an event
+		if msg, err := d.startPluginSync(); err != nil {
+			writeJSON(w, 200, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, 200, map[string]string{"status": "started", "message": msg})
+		}
+	})
 	mux.HandleFunc("/upgrade/start", func(w http.ResponseWriter, r *http.Request) {
 		if err := d.startUpgrade(r.URL.Query().Get("failback") == "true"); err != nil {
 			writeJSON(w, 200, map[string]string{"error": err.Error()})

@@ -87,30 +87,12 @@ func (d *Daemon) ensurePackages(want map[string]string) error {
 	d.event("info", "installing %d plugin(s) replicated from the active node: %s", len(install), strings.Join(install, ", "))
 	// The installation can take minutes. A promotion of this node must not run next to it (a plugin's install scripts restart
 	// configd and reconfigure plugins, which collides with the takeover): blockPackageInstall cancels it, and the whole process group
-	// of pkg goes (ownGroup).
-	// The role check and the registration of the installation happen under the same lock that a promotion takes to block the
-	// installations (blockPackageInstall): either the promotion finds this installation and stops it, or this installation finds
-	// the promotion and does not start. There is no window between the two.
-	ctx, cancel := context.WithTimeout(context.Background(), pkgInstallTimeout)
-	done := make(chan struct{})
-	d.pkgr.mu.Lock()
-	if d.pkgr.blocked || d.store.Get().State != StateStandby {
-		d.pkgr.mu.Unlock()
-		cancel()
-		return errors.New("not installing plugins: this node is taking over or no longer standby")
+	// of pkg goes (ownGroup). The role check and the registration are one step under the lock of the promotion (registerInstall).
+	ctx, release, err := d.registerInstall(pkgInstallTimeout, true)
+	if err != nil {
+		return err
 	}
-	if pkgAfterRoleCheck != nil {
-		pkgAfterRoleCheck() // the tests stop here (lock held) to start a promotion at this very point
-	}
-	d.pkgr.cancel, d.pkgr.done = cancel, done
-	d.pkgr.mu.Unlock()
-	defer func() {
-		cancel()
-		d.pkgr.mu.Lock()
-		d.pkgr.cancel, d.pkgr.done = nil, nil
-		d.pkgr.mu.Unlock()
-		close(done)
-	}()
+	defer release()
 	env := append(os.Environ(), "HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy, "ASSUME_ALWAYS_YES=yes")
 	out, err := pkgInstall(ctx, env, install)
 	switch {
@@ -289,4 +271,30 @@ func (d *Daemon) pkgRetryDue() bool {
 	d.pkgRetry.mu.Lock()
 	defer d.pkgRetry.mu.Unlock()
 	return d.pkgRetry.key != "" && time.Since(d.pkgRetry.at) >= pkgRetryAfter
+}
+
+// registerInstall registers an installation that a promotion can cancel (blockPackageInstall). The check that no promotion runs, the
+// check of the role when standbyOnly, and the registration are one step under pkgr.mu: either the promotion finds the installation
+// and stops it, or the installation finds the promotion and does not start. release ends the registration.
+func (d *Daemon) registerInstall(timeout time.Duration, standbyOnly bool) (ctx context.Context, release func(), err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	done := make(chan struct{})
+	d.pkgr.mu.Lock()
+	if d.pkgr.blocked || (standbyOnly && d.store.Get().State != StateStandby) {
+		d.pkgr.mu.Unlock()
+		cancel()
+		return nil, nil, errors.New("not installing: this node is taking over or no longer standby")
+	}
+	if pkgAfterRoleCheck != nil {
+		pkgAfterRoleCheck() // the tests stop here (lock held) to start a promotion at this very point
+	}
+	d.pkgr.cancel, d.pkgr.done = cancel, done
+	d.pkgr.mu.Unlock()
+	return ctx, func() {
+		cancel()
+		d.pkgr.mu.Lock()
+		d.pkgr.cancel, d.pkgr.done = nil, nil
+		d.pkgr.mu.Unlock()
+		close(done)
+	}, nil
 }

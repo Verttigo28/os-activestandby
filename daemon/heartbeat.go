@@ -426,7 +426,11 @@ func (d *Daemon) checkVersions(m hbMsg) {
 		}
 	}
 	if mism {
-		d.event("warning", "peer runs %s, this node runs %s (plugin %s): finish updating both nodes; config sync is refused across core versions", peer, d.localVer, version)
+		if m.Ver != d.localVer {
+			d.event("warning", "peer runs %s, this node runs %s (plugin %s): finish updating both nodes; config sync is refused across core versions", peer, d.localVer, version)
+		} else {
+			d.event("warning", "the plugin differs: the peer runs %s, this node %s (the same OPNsense): use Operations > Synchronize plugin version (hasyncd ctl plugin-sync)", m.Plug, version)
+		}
 	} else {
 		d.event("info", "both nodes run %s again", d.localVer)
 	}

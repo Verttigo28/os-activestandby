@@ -13,7 +13,7 @@ class PairingController extends ApiControllerBase
 {
     private const MUTATING = ['ctl_prepare', 'ctl_cancel', 'ctl_pair', 'ctl_break', 'ctl_failover', 'ctl_failover_force', 'ctl_promote',
         'ctl_promote_force', 'ctl_demote', 'ctl_resync', 'ctl_maintenance', 'ctl_upgrade_start', 'ctl_upgrade_start_failback',
-        'ctl_upgrade_cancel', 'ctl_kit', 'ctl_kit_cancel'];
+        'ctl_upgrade_cancel', 'ctl_kit', 'ctl_kit_cancel', 'ctl_plugin_sync'];
 
     private function ctl(string $action, array $params = []): array
     {
@@ -75,6 +75,12 @@ class PairingController extends ApiControllerBase
             return ['error' => 'POST required'];
         }
         return $this->ctl($this->request->getPost('failback') === '1' ? 'ctl_upgrade_start_failback' : 'ctl_upgrade_start');
+    }
+
+    /** Brings both nodes to the newer plugin version (the older node fetches the package from the newer one). Administrator tier. */
+    public function pluginsyncAction()
+    {
+        return $this->request->isPost() ? $this->ctl('ctl_plugin_sync') : ['error' => 'POST required'];
     }
 
     public function upgradecancelAction()
