@@ -21,23 +21,23 @@ if /usr/local/etc/rc.d/hasyncd onestatus >/dev/null 2>&1; then
     esac
     /usr/local/etc/rc.d/hasyncd onerestart >/dev/null 2>&1 || true
     if [ -n "$opened" ]; then
-        (
+        # detached into its own session by daemon(8): a pkg whose session ends, or a daemon that kills the children of its install
+        # (the plugin synchronisation), must not take the closing of the window with it (seen on the lab: maintenance left on)
+        # shellcheck disable=SC2016 # the script is meant to be expanded by the detached shell, not by this one
+        OPENED="$opened" /usr/sbin/daemon -f /bin/sh -c '
             i=0
             while [ "$i" -lt 60 ]; do
                 sleep 2
                 i=$((i + 2))
-                now=$(/usr/local/sbin/hasyncd ctl status 2>/dev/null)
-                case "$now" in
-                *'"daemon":"up"'*)
+                if /usr/local/sbin/hasyncd ctl status 2>/dev/null | grep -q "\"daemon\":\"up\""; then
                     sleep 10 # the restarted daemon hears its peer again before automatic failover resumes
                     # only the window this script opened: if someone changed the maintenance mode meanwhile, it is theirs
-                    if /usr/local/sbin/hasyncd ctl status 2>/dev/null | grep -q "$opened"; then
+                    if /usr/local/sbin/hasyncd ctl status 2>/dev/null | grep -q "$OPENED"; then
                         /usr/local/sbin/hasyncd ctl maintenance off >/dev/null 2>&1
                     fi
                     break
-                    ;;
-                esac
+                fi
             done
-        ) </dev/null >/dev/null 2>&1 &
+        '
     fi
 fi

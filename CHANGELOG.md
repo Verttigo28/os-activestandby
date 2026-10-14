@@ -15,6 +15,7 @@ An independent audit of 11372fc, then two independent reviews of the whole repos
 - A missing TLS identity on a paired node is treated as replaced (the node goes to standby); the epoch of a takeover is above the highest leader epoch known; maintenance changes are compared as times; the fencing command runs in its own process group; a configuration apply checks pf after the reload; the window in which an update may write the configuration of a standby survives a restart of the daemon.
 - **Different HA or management interface keys on the two nodes** are refused at pairing and at each sync, instead of putting the active node's HA rules on another interface of the standby (which cut its HA link).
 - The package install script leaves an existing maintenance window alone and closes only the one it opened; it lives in `build/pkg-scripts` and is checked by ShellCheck.
+- **The maintenance window of a plugin installation stayed open for an hour** when the installing session ended, or when the daemon that ran the installation (plugin synchronisation) was restarted by it: the closing of the window ran in the process group of the install. It is detached (`daemon(8)`) now. Found on the lab, verified there with an ssh session that ended right after `pkg add`.
 ### CI
 - staticcheck and govulncheck also for FreeBSD (the binary that ships); ShellCheck covers the syshooks and the package scripts.
 ### Tests
